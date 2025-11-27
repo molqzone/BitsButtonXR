@@ -10,7 +10,6 @@ depends: []
 === END MANIFEST === */
 // clang-format on
 
-#include "app_framework.hpp"
 #include "libxr.hpp"
 #include <cstdint>
 
@@ -71,8 +70,7 @@ public:
 
   BitsButtonXR(LibXR::HardwareContainer &hw, LibXR::ApplicationManager &app,
                std::initializer_list<SingleButtonConfig> single_buttons,
-               std::initializer_list<CombinedButtonConfig> combined_buttons,
-               LibXR::Timebase &timebase)
+               std::initializer_list<CombinedButtonConfig> combined_buttons)
       : LibXR::Application(hw, app) {
     // Hardware initialization example:
     // auto dev = hw.template Find<LibXR::GPIO>("led");
@@ -91,7 +89,7 @@ private:
     ButtonConstraints constraints;
     TimeStampMS state_entry_time;
     LibXR::GPIO *gpio_handle;
-    uint8_t target_level;
+    uint8_t active_level;
   };
 
   struct CombinedButton {
@@ -99,9 +97,9 @@ private:
     ButtonMaskType combined_mask;
     uint8_t key_count;
     bool suppress_single_keys;
+    bool is_active;
   };
 
-  LibXR::Timebase &timebase_;
   LibXR::Event button_events_;
 
   ButtonMaskType current_mask_ = 0;
@@ -109,6 +107,9 @@ private:
 
   std::array<SingleButton, BITS_BTN_MAX_SINGLES> single_buttons_{};
   std::array<CombinedButton, BITS_BTN_MAX_COMBINED> combined_buttons_{};
+
+  // Index array for sorted access to combined buttons
+  std::array<uint16_t, BITS_BTN_MAX_COMBINED> combo_sorted_indices_{};
 
   // Find GPIO with hw.template FindOrExit<LibXR::GPIO> for
   // std::initializer_list<SingleButtonConfig> single_buttons
@@ -146,15 +147,113 @@ private:
     return LibXR::ErrorCode::OK;
   }
 
-  // Helper function to find single button index by alias
+  // Helper function to find single button index by alias using C-style strings
   uint8_t GetButtonIndexByAlias(const char *alias) {
+    if (!alias) {
+      return BITS_BTN_INVALID_INDEX;
+    }
+
     for (size_t i = 0; i < single_buttons_.size(); ++i) {
       const auto &btn = single_buttons_.at(i);
-      if (btn.key_alias && alias && strcmp(btn.key_alias, alias) == 0) {
+      if (btn.key_alias && strcmp(btn.key_alias, alias) == 0) {
         return static_cast<uint8_t>(i);
       }
     }
     return BITS_BTN_INVALID_INDEX;
+  }
+
+  /**
+   * @brief  Calculate combined button mask from single button aliases
+   * @param  single_key_aliases: Array of single button alias strings
+   * @param  key_count: Number of keys in the combination
+   * @param [out] mask: Calculated bit mask for the combination
+   * @retval LibXR::ErrorCode::OK on success, error code on failure
+   * @note   Handles validation, bounds checking, and bit mask calculation
+   */
+  LibXR::ErrorCode CalculateCombinedMask(const char **single_key_aliases,
+                                         uint8_t key_count,
+                                         ButtonMaskType &mask) {
+    if (!single_key_aliases || key_count == 0) {
+      return LibXR::ErrorCode::ARG_ERR;
+    }
+
+    mask = 0;
+
+    // Process each button in the combination
+    for (uint8_t j = 0; j < key_count; ++j) {
+      const char *single_alias = single_key_aliases[j];
+      if (!single_alias) {
+        return LibXR::ErrorCode::ARG_ERR;
+      }
+
+      // Find button index by alias
+      uint8_t single_index = GetButtonIndexByAlias(single_alias);
+      if (single_index == BITS_BTN_INVALID_INDEX) {
+        return LibXR::ErrorCode::ARG_ERR;
+      }
+
+      // Bounds checking for bit mask calculation
+      if (single_index >= sizeof(ButtonMaskType) * 8) {
+        return LibXR::ErrorCode::OUT_OF_RANGE;
+      }
+
+      // Set bit for this button in the mask
+      mask |= static_cast<ButtonMaskType>(1UL) << single_index;
+    }
+
+    return LibXR::ErrorCode::OK;
+  }
+
+  /**
+   * @brief  Sort combined buttons by key count in descending order using index
+   * array
+   * @param  count: Number of valid combined buttons to sort
+   * @retval None
+   * @note   Uses insertion sort algorithm with index array approach:
+   *         - Maintains original array order while providing sorted access via
+   * indices
+   *         - Efficient for small arrays (O(n²) worst case, O(n) best case)
+   *         - Stable sort (maintains relative order of equal elements)
+   *         - Ensures combos with more keys are matched first during detection
+   *         - Uses std::array::at() for bounds safety and LibXR::String for
+   * comparisons
+   */
+  void SortCombinedButtonsDescending(size_t count) {
+    // Early exit for trivial cases
+    if (count <= 1) {
+      return;
+    }
+
+    // Validate count against array bounds
+    if (count > combined_buttons_.size()) {
+      count = combined_buttons_.size();
+    }
+
+    // Initialize index array (0,1,2,...)
+    for (size_t i = 0; i < count; ++i) {
+      combo_sorted_indices_.at(i) = static_cast<uint16_t>(i);
+    }
+
+    // Insertion sort on index array in descending order by key_count
+    // This ensures that button combinations with more keys are checked first,
+    // preventing false positives where smaller combinations match larger ones
+    for (size_t i = 1; i < count; ++i) {
+      uint16_t temp_idx = combo_sorted_indices_.at(i);
+      uint8_t temp_key_count = combined_buttons_.at(temp_idx).key_count;
+      int16_t j = static_cast<int16_t>(i) - 1;
+
+      // Find insertion position: higher key count has higher priority
+      // Shift indices of buttons with lower key count to the right
+      while (j >= 0 &&
+             combined_buttons_.at(combo_sorted_indices_.at(j)).key_count <
+                 temp_key_count) {
+        combo_sorted_indices_.at(j + 1) = combo_sorted_indices_.at(j);
+        j--;
+      }
+
+      // Insert current button index at correct position
+      combo_sorted_indices_.at(j + 1) = temp_idx;
+    }
   }
 
   // Initialize combined buttons to CombinedButton, sort by key count
@@ -174,49 +273,18 @@ private:
       }
     }
 
-    // Store metadata for sorting using std::array with compile-time size
-    std::array<ButtonMaskType, BITS_BTN_MAX_COMBINED> combined_masks{};
-    std::array<uint8_t, BITS_BTN_MAX_COMBINED> key_counts{};
     size_t combined_index = 0;
 
     // First pass: Calculate combined masks and collect metadata
     for (const auto &cfg : configs) {
-      if (combined_index >= BITS_BTN_MAX_COMBINED) {
-        return LibXR::ErrorCode::SIZE_ERR;
-      }
-
       ButtonMaskType mask = 0;
 
-      // Calculate combined_mask with bounds checking
-      for (uint8_t j = 0; j < cfg.key_count; ++j) {
-        const char *single_alias = cfg.single_key_aliases[j];
-        if (!single_alias) {
-          return LibXR::ErrorCode::ARG_ERR;
-        }
-
-        uint8_t single_index = GetButtonIndexByAlias(single_alias);
-        if (single_index == BITS_BTN_INVALID_INDEX) {
-          return LibXR::ErrorCode::ARG_ERR;
-        }
-
-        // Bit mask calculation with bounds checking
-        if (single_index >= sizeof(ButtonMaskType) * 8) {
-          return LibXR::ErrorCode::OUT_OF_RANGE;
-        }
-        mask |= (ButtonMaskType)1UL << single_index;
+      // Calculate combined mask using the helper function
+      auto result =
+          CalculateCombinedMask(cfg.single_key_aliases, cfg.key_count, mask);
+      if (result != LibXR::ErrorCode::OK) {
+        return LibXR::ErrorCode::ARG_ERR;
       }
-
-      // Check for duplicate combined masks using std::array::at() for bounds
-      // safety
-      for (size_t i = 0; i < combined_index; ++i) {
-        if (combined_masks.at(i) == mask) {
-          return LibXR::ErrorCode::ARG_ERR;
-        }
-      }
-
-      // Store metadata for sorting using std::array::at()
-      combined_masks.at(combined_index) = mask;
-      key_counts.at(combined_index) = cfg.key_count;
 
       // Fill runtime structure using std::array::at() for bounds safety
       auto &combined_btn = combined_buttons_.at(combined_index);
@@ -234,14 +302,11 @@ private:
       ++combined_index;
     }
 
-    // TODO: (Optional) Sort combined buttons: by key_count
-    // Sort in descending order, ensuring combos with more keys are matched
-    // first during detection. Since std::array has a size determined at compile
-    // time, manual sorting may involve temporary arrays, so it's omitted here
-    // to maintain simplicity.
+    // Sort combined buttons by key count in descending order
+    // Using insertion sort for efficiency with small arrays and maintaining
+    // stability
+    SortCombinedButtonsDescending(combined_index);
 
     return LibXR::ErrorCode::OK;
   }
-
-  ButtonMaskType current_mask_;
 };
