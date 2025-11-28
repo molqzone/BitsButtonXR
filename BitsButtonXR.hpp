@@ -20,7 +20,6 @@ depends: []
 
 class BitsButtonXR : public LibXR::Application {
 public:
-  using TimeStampMS = uint32_t;
   using ButtonStateBits = uint32_t;
   using ButtonMaskType = uint32_t;
 
@@ -42,33 +41,47 @@ public:
     RELEASED = 5      ///< Button confirmed released
   };
 
+  /** Timing constraints for button behavior detection */
   struct ButtonConstraints {
-    uint16_t short_press_time_ms;
-    uint16_t long_press_start_time_ms;
-    uint16_t long_press_period_triger_ms;
-    uint16_t time_window_time_ms;
+    uint16_t short_press_time_ms;         ///< Time threshold for short press
+    uint16_t long_press_start_time_ms;    ///< Time when long press starts
+    uint16_t long_press_period_triger_ms; ///< Period for long press hold events
+    uint16_t time_window_time_ms;         ///< Window for double click detection
   };
 
+  /** Configuration for combined button patterns */
   struct CombinedButtonConfig {
-    const char *combined_alias;
-    bool suppress_single_keys;
-    uint8_t key_count;
-    const uint8_t *button_indices;
+    const char *combined_alias; ///< Name identifier for the combination
+    bool suppress_single_keys; ///< Whether to suppress individual button events
+    uint8_t key_count;         ///< Number of buttons in this combination
+    const uint8_t
+        *button_indices; ///< Array of button indices that form this combo
   };
 
+  /** Configuration for individual single buttons */
   struct SingleButtonConfig {
-    const char *key_alias;
-    uint8_t active_level;
-    ButtonConstraints constraints;
+    const char *key_alias; ///< GPIO name identifier for the button
+    bool active_level; ///< GPIO level that indicates button press (false=low,
+                       ///< true=high)
+    ButtonConstraints constraints; ///< Timing constraints for this button
   };
 
+  /** Result structure for button events */
   struct ButtonEventResult {
-    const char *key_alias;
-    ButtonEvent event_type;
-    ButtonStateBits state_bits;
-    uint16_t long_press_period_trigger_cnt;
+    const char *key_alias;      ///< Button name that triggered event
+    ButtonEvent event_type;     ///< Type of event that occurred
+    ButtonStateBits state_bits; ///< Current state of all buttons
+    uint16_t long_press_period_trigger_cnt; ///< Count of long press periods
+                                            ///< triggered
   };
 
+  /**
+   * @brief Construct a new BitsButtonXR object
+   * @param hw Hardware container for GPIO access
+   * @param app Application manager reference
+   * @param single_buttons List of individual button configurations
+   * @param combined_buttons List of combined button configurations
+   */
   BitsButtonXR(LibXR::HardwareContainer &hw, LibXR::ApplicationManager &app,
                std::initializer_list<SingleButtonConfig> single_buttons,
                std::initializer_list<CombinedButtonConfig> combined_buttons)
@@ -77,48 +90,57 @@ public:
     InitializeCombinedButtons(combined_buttons);
   }
 
+  /** @brief Get the event handle for button events */
   LibXR::Event GetEventHandle() { return button_events_; }
 
+  /** @brief Monitor function called by application framework */
   void OnMonitor() override {}
 
 private:
+  /** Internal state for a single button */
   struct SingleButton {
-    const char *key_alias;
-    ButtonState current_state;
-    ButtonState last_state;
-    ButtonStateBits state_bits;
-    ButtonConstraints constraints;
-    TimeStampMS state_entry_time;
-    LibXR::GPIO *gpio_handle;
-    uint8_t active_level;
-    uint8_t button_bit;
+    const char *key_alias;         ///< GPIO name identifier
+    ButtonState current_state;     ///< Current state machine state
+    ButtonState last_state;        ///< Previous state machine state
+    ButtonStateBits state_bits;    ///< Bit mask for this button
+    ButtonConstraints constraints; ///< Timing constraints
+    LibXR::Timer state_timer;       ///< Timer for state timing management
+    LibXR::GPIO *gpio_handle;      ///< GPIO handle for reading button state
+    bool active_level;  ///< GPIO level for button press (false=low, true=high)
+    uint8_t button_bit; ///< Bit position in mask
   };
 
+  /** Internal state for a combined button pattern */
   struct CombinedButton {
-    SingleButton combined_btn;
-    ButtonMaskType combined_mask;
-    uint8_t key_count;
-    bool suppress_single_keys;
-    bool is_active;
+    SingleButton combined_btn;    ///< Embedded button state machine
+    ButtonMaskType combined_mask; ///< Bit mask of buttons in this combo
+    uint8_t key_count;            ///< Number of buttons in this combo
+    bool suppress_single_keys;    ///< Suppress individual button events
+    bool is_active;               ///< Whether this combo is currently active
   };
 
+  /** Event system for button notifications */
   LibXR::Event button_events_;
 
-  ButtonMaskType current_mask_ = 0;
-  ButtonMaskType last_mask_ = 0;
+  /** Current and previous button states for change detection */
+  ButtonMaskType current_mask_ = 0; ///< Current button state mask
+  ButtonMaskType last_mask_ = 0;    ///< Previous button state mask
 
+  /** Storage for button configurations and states */
   [[maybe_unused]] std::array<SingleButton, BITS_BTN_MAX_SINGLES>
-      single_buttons_{};
+      single_buttons_{}; ///< Array of single button states
   [[maybe_unused]] std::array<CombinedButton, BITS_BTN_MAX_COMBINED>
-      combined_buttons_{};
+      combined_buttons_{}; ///< Array of combined button states
 
-  // Index array for sorted access to combined buttons
+  /** Index array for sorted access to combined buttons */
   std::array<uint16_t, BITS_BTN_MAX_COMBINED> sorted_indices_{};
 
-  // Find GPIO with hw.template FindOrExit<LibXR::GPIO> for
-  // std::initializer_list<SingleButtonConfig> single_buttons
-  // and initialize SingleButton structures.
-  // and bind GPIO callbacks to single buttons.
+  /**
+   * @brief Initialize single button configurations
+   * @param hw Hardware container for GPIO access
+   * @param configs List of button configurations
+   * @return Error code indicating success or failure
+   */
   LibXR::ErrorCode
   InitializeSingleButtons(LibXR::HardwareContainer &hw,
                           std::initializer_list<SingleButtonConfig> configs) {
@@ -151,12 +173,11 @@ private:
   }
 
   /**
-   * @brief  Calculate combined button mask from button indices
-   * @param  button_indices: Array of button indices
-   * @param  key_count: Number of keys in the combination
-   * @param [out] mask: Calculated bit mask for the combination
-   * @retval LibXR::ErrorCode::OK on success, error code on failure
-   * @note   Handles validation, bounds checking, and bit mask calculation
+   * @brief Calculate combined button mask from button indices
+   * @param button_indices Array of button indices
+   * @param key_count Number of keys in the combination
+   * @param mask Calculated bit mask for the combination
+   * @return Error code indicating success or failure
    */
   LibXR::ErrorCode CalculateCombinedMask(const uint8_t *button_indices,
                                          uint8_t key_count,
@@ -183,10 +204,8 @@ private:
   }
 
   /**
-   * @brief  Sort combined buttons by key count in descending order using index
-   * array
-   * @param  count: Number of valid combined buttons to sort
-   * @retval None
+   * @brief Sort combined buttons by key count in descending order
+   * @param count Number of valid combined buttons to sort
    */
   void SortCombinedButtonsDescending(size_t count) {
     // Early exit for trivial cases
@@ -209,7 +228,7 @@ private:
     // preventing false positives where smaller combinations match larger ones
     for (size_t i = 1; i < count; ++i) {
       uint16_t curr_idx = sorted_indices_.at(i);
-      uint8_t curr_keys = 0; // Initialize to avoid clang-tidy warning
+      uint8_t curr_keys = 0;
       curr_keys = combined_buttons_.at(curr_idx).key_count;
       int16_t pos = static_cast<int16_t>(i - 1);
 
@@ -227,9 +246,11 @@ private:
     }
   }
 
-  // Initialize combined buttons to CombinedButton, sort by key count
-  // descending. Enhanced with std::array features for type safety and
-  // efficiency.
+  /**
+   * @brief Initialize combined button configurations
+   * @param configs List of combined button configurations
+   * @return Error code indicating success or failure
+   */
   LibXR::ErrorCode InitializeCombinedButtons(
       std::initializer_list<CombinedButtonConfig> configs) {
     if (configs.size() > BITS_BTN_MAX_COMBINED) {
