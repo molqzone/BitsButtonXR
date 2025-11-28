@@ -107,8 +107,10 @@ private:
   ButtonMaskType current_mask_ = 0;
   ButtonMaskType last_mask_ = 0;
 
-  std::array<SingleButton, BITS_BTN_MAX_SINGLES> single_buttons_{};
-  std::array<CombinedButton, BITS_BTN_MAX_COMBINED> combined_buttons_{};
+  [[maybe_unused]] std::array<SingleButton, BITS_BTN_MAX_SINGLES>
+      single_buttons_{};
+  [[maybe_unused]] std::array<CombinedButton, BITS_BTN_MAX_COMBINED>
+      combined_buttons_{};
 
   // Index array for sorted access to combined buttons
   std::array<uint16_t, BITS_BTN_MAX_COMBINED> sorted_indices_{};
@@ -207,8 +209,9 @@ private:
     // preventing false positives where smaller combinations match larger ones
     for (size_t i = 1; i < count; ++i) {
       uint16_t curr_idx = sorted_indices_.at(i);
-      uint8_t curr_keys = combined_buttons_.at(curr_idx).key_count;
-      int16_t pos = static_cast<int16_t>(i) - 1;
+      uint8_t curr_keys = 0; // Initialize to avoid clang-tidy warning
+      curr_keys = combined_buttons_.at(curr_idx).key_count;
+      int16_t pos = static_cast<int16_t>(i - 1);
 
       // Find insertion position: higher key count has higher priority
       // Shift indices of buttons with lower key count to the right
