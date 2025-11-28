@@ -13,7 +13,6 @@ depends: []
 #include "app_framework.hpp"
 #include "gpio.hpp"
 #include <cstdint>
-#include <cstring>
 
 #define BITS_BTN_MAX_SINGLES 32
 #define BITS_BTN_MAX_COMBINED 16
@@ -172,159 +171,180 @@ private:
 
       // TODO: Register GPIO interrupt/callback to read button state
       // gpio_handle->RegisterCallback(...);
-    }
 
-    return LibXR::ErrorCode::OK;
-  }
-
-  /**
-   * @brief Calculate combined button mask from button indices
-   * @param button_indices Array of button indices
-   * @param key_count Number of keys in the combination
-   * @param mask Calculated bit mask for the combination
-   * @return Error code indicating success or failure
-   */
-  LibXR::ErrorCode CalculateCombinedMask(const uint8_t *button_indices,
-                                         uint8_t key_count,
-                                         ButtonMaskType &mask) {
-    if (!button_indices || key_count == 0) {
-      return LibXR::ErrorCode::ARG_ERR;
-    }
-
-    mask = 0;
-
-    for (uint8_t j = 0; j < key_count; ++j) {
-      uint8_t button_index = button_indices[j];
-
-      // Bounds checking
-      if (button_index >= BITS_BTN_MAX_SINGLES) {
-        return LibXR::ErrorCode::OUT_OF_RANGE;
+      /* GPIO Initializing */
+      if (cfg.active_level) {
+        gpio_handle->SetConfig(
+            {LibXR::GPIO::Direction::FALL_INTERRUPT, LibXR::GPIO::Pull::UP});
+      } else {
+        gpio_handle->SetConfig({LibXR::GPIO::Direction::RISING_INTERRUPT,
+                                LibXR::GPIO::Pull::DOWN});
       }
 
-      // Set bit for this button in the mask
-      mask |= static_cast<ButtonMaskType>(1UL) << button_index;
+      auto gpio_callback_function = [](bool, SingleButton *single_button) {
+        // GPIO callback function to handle button state changes
+        // This function should read the GPIO level and update the button state
+        // machine accordingly
+      };
+
+      auto gpio_callback = LibXR::GPIO::Callback::Create(
+          gpio_callback_function(gpio_callback_function,
+                                 SingleButton * single_button),
+          &single_buttons_);
+      gpio_handle->RegisterCallback(gpio_callback);
+
+      return LibXR::ErrorCode::OK;
     }
 
-    return LibXR::ErrorCode::OK;
-  }
-
-  /**
-   * @brief Timer callback function for button state management
-   * @param button Pointer to the button instance
-   */
-  static void ButtonStateTimerCallback(void *arg);
-
-  /**
-   * @brief Sort combined buttons by key count in descending order
-   * @param count Number of valid combined buttons to sort
-   */
-  void SortCombinedButtonsDescending(size_t count) {
-    // Early exit for trivial cases
-    if (count <= 1) {
-      return;
-    }
-
-    // Validate count against array bounds
-    if (count > combined_buttons_.size()) {
-      count = combined_buttons_.size();
-    }
-
-    // Initialize index array (0,1,2,...)
-    for (size_t i = 0; i < count; ++i) {
-      sorted_indices_.at(i) = static_cast<uint16_t>(i);
-    }
-
-    // Insertion sort on index array in descending order by key_count
-    // This ensures that button combinations with more keys are checked first,
-    // preventing false positives where smaller combinations match larger ones
-    for (size_t i = 1; i < count; ++i) {
-      uint16_t curr_idx = sorted_indices_.at(i);
-      uint8_t curr_keys = 0;
-      curr_keys = combined_buttons_.at(curr_idx).key_count;
-      int16_t pos = static_cast<int16_t>(i - 1);
-
-      // Find insertion position: higher key count has higher priority
-      // Shift indices of buttons with lower key count to the right
-      while (pos >= 0 &&
-             combined_buttons_.at(sorted_indices_.at(pos)).key_count <
-                 curr_keys) {
-        sorted_indices_.at(pos + 1) = sorted_indices_.at(pos);
-        pos--;
-      }
-
-      // Insert current button index at correct position
-      sorted_indices_.at(pos + 1) = curr_idx;
-    }
-  }
-
-  /**
-   * @brief Initialize combined button configurations
-   * @param configs List of combined button configurations
-   * @return Error code indicating success or failure
-   */
-  LibXR::ErrorCode InitializeCombinedButtons(
-      std::initializer_list<CombinedButtonConfig> configs) {
-    if (configs.size() > BITS_BTN_MAX_COMBINED) {
-      return LibXR::ErrorCode::SIZE_ERR;
-    }
-
-    // Validate all configs before processing to fail fast
-    for (const auto &cfg : configs) {
-      if (!cfg.combined_alias || cfg.key_count == 0 || !cfg.button_indices) {
-        return LibXR::ErrorCode::ARG_ERR;
-      }
-    }
-
-    size_t combined_index = 0;
-
-    // First pass: Calculate combined masks and collect metadata
-    for (const auto &cfg : configs) {
-      ButtonMaskType mask = 0;
-
-      // Calculate combined mask using the helper function
-      auto ec = CalculateCombinedMask(cfg.button_indices, cfg.key_count, mask);
-      if (ec != LibXR::ErrorCode::OK) {
+    /**
+     * @brief Calculate combined button mask from button indices
+     * @param button_indices Array of button indices
+     * @param key_count Number of keys in the combination
+     * @param mask Calculated bit mask for the combination
+     * @return Error code indicating success or failure
+     */
+    LibXR::ErrorCode CalculateCombinedMask(const uint8_t *button_indices,
+                                           uint8_t key_count,
+                                           ButtonMaskType &mask) {
+      if (!button_indices || key_count == 0) {
         return LibXR::ErrorCode::ARG_ERR;
       }
 
-      // Fill runtime structure using std::array::at() for bounds safety
-      auto &combined_btn = combined_buttons_.at(combined_index);
-      combined_btn.combined_mask = mask;
-      combined_btn.key_count = cfg.key_count;
-      combined_btn.suppress_single_keys = cfg.suppress_single_keys;
-      combined_btn.is_active = true;
+      mask = 0;
 
-      // Initialize embedded SingleButton state machine
-      combined_btn.combined_btn.key_alias = cfg.combined_alias;
-      combined_btn.combined_btn.current_state = ButtonState::IDLE;
-      // Combined buttons don't need GPIO handle and active_level
-      combined_btn.combined_btn.gpio_handle = nullptr;
+      for (uint8_t j = 0; j < key_count; ++j) {
+        uint8_t button_index = button_indices[j];
 
-      ++combined_index;
+        // Bounds checking
+        if (button_index >= BITS_BTN_MAX_SINGLES) {
+          return LibXR::ErrorCode::OUT_OF_RANGE;
+        }
+
+        // Set bit for this button in the mask
+        mask |= static_cast<ButtonMaskType>(1UL) << button_index;
+      }
+
+      return LibXR::ErrorCode::OK;
     }
 
-    SortCombinedButtonsDescending(combined_index);
+    /**
+     * @brief Timer callback function for button state management
+     * @param button Pointer to the button instance
+     */
+    static void ButtonStateTimerCallback(
+        void *arg); // TODO: This function should be a lambda
 
-    return LibXR::ErrorCode::OK;
+    /**
+     * @brief Sort combined buttons by key count in descending order
+     * @param count Number of valid combined buttons to sort
+     */
+    void SortCombinedButtonsDescending(size_t count) {
+      // Early exit for trivial cases
+      if (count <= 1) {
+        return;
+      }
+
+      // Validate count against array bounds
+      if (count > combined_buttons_.size()) {
+        count = combined_buttons_.size();
+      }
+
+      // Initialize index array (0,1,2,...)
+      for (size_t i = 0; i < count; ++i) {
+        sorted_indices_.at(i) = static_cast<uint16_t>(i);
+      }
+
+      // Insertion sort on index array in descending order by key_count
+      // This ensures that button combinations with more keys are checked first,
+      // preventing false positives where smaller combinations match larger ones
+      for (size_t i = 1; i < count; ++i) {
+        uint16_t curr_idx = sorted_indices_.at(i);
+        uint8_t curr_keys = 0;
+        curr_keys = combined_buttons_.at(curr_idx).key_count;
+        int16_t pos = static_cast<int16_t>(i - 1);
+
+        // Find insertion position: higher key count has higher priority
+        // Shift indices of buttons with lower key count to the right
+        while (pos >= 0 &&
+               combined_buttons_.at(sorted_indices_.at(pos)).key_count <
+                   curr_keys) {
+          sorted_indices_.at(pos + 1) = sorted_indices_.at(pos);
+          pos--;
+        }
+
+        // Insert current button index at correct position
+        sorted_indices_.at(pos + 1) = curr_idx;
+      }
+    }
+
+    /**
+     * @brief Initialize combined button configurations
+     * @param configs List of combined button configurations
+     * @return Error code indicating success or failure
+     */
+    LibXR::ErrorCode InitializeCombinedButtons(
+        std::initializer_list<CombinedButtonConfig> configs) {
+      if (configs.size() > BITS_BTN_MAX_COMBINED) {
+        return LibXR::ErrorCode::SIZE_ERR;
+      }
+
+      // Validate all configs before processing to fail fast
+      for (const auto &cfg : configs) {
+        if (!cfg.combined_alias || cfg.key_count == 0 || !cfg.button_indices) {
+          return LibXR::ErrorCode::ARG_ERR;
+        }
+      }
+
+      size_t combined_index = 0;
+
+      // First pass: Calculate combined masks and collect metadata
+      for (const auto &cfg : configs) {
+        ButtonMaskType mask = 0;
+
+        // Calculate combined mask using the helper function
+        auto ec =
+            CalculateCombinedMask(cfg.button_indices, cfg.key_count, mask);
+        if (ec != LibXR::ErrorCode::OK) {
+          return LibXR::ErrorCode::ARG_ERR;
+        }
+
+        // Fill runtime structure using std::array::at() for bounds safety
+        auto &combined_btn = combined_buttons_.at(combined_index);
+        combined_btn.combined_mask = mask;
+        combined_btn.key_count = cfg.key_count;
+        combined_btn.suppress_single_keys = cfg.suppress_single_keys;
+        combined_btn.is_active = true;
+
+        // Initialize embedded SingleButton state machine
+        combined_btn.combined_btn.key_alias = cfg.combined_alias;
+        combined_btn.combined_btn.current_state = ButtonState::IDLE;
+        // Combined buttons don't need GPIO handle and active_level
+        combined_btn.combined_btn.gpio_handle = nullptr;
+
+        ++combined_index;
+      }
+
+      SortCombinedButtonsDescending(combined_index);
+
+      return LibXR::ErrorCode::OK;
+    }
+  };
+
+  void BitsButtonXR::ButtonStateTimerCallback(void *arg) {
+    // Timer callback for button state management
+    // This function is used to debounce and count for long presses
+    // The Timer will be stopped when the button is not pressed
+    SingleButton *button = static_cast<SingleButton *>(arg);
+    if (button && button->gpio_handle) {
+      // Read the current GPIO state
+      bool current_level = button->gpio_handle->Read();
+      UNUSED(current_level);
+      bool is_pressed = (current_level == button->active_level);
+      UNUSED(is_pressed);
+
+      // Update state machine based on current input and constraints
+      // This is a placeholder - actual state machine logic would be implemented
+      // here
+      // TODO: Implement full button state machine logic
+    }
   }
-};
-
-void BitsButtonXR::ButtonStateTimerCallback(void *arg) {
-  // Timer callback for button state management
-  // This function will be called periodically to handle button state
-  // transitions Implementation details would depend on the specific button
-  // state machine logic
-  SingleButton *button = static_cast<SingleButton *>(arg);
-  if (button && button->gpio_handle) {
-    // Read the current GPIO state
-    bool current_level = button->gpio_handle->Read();
-    UNUSED(current_level);
-    bool is_pressed = (current_level == button->active_level);
-    UNUSED(is_pressed);
-
-    // Update state machine based on current input and constraints
-    // This is a placeholder - actual state machine logic would be implemented
-    // here
-    // TODO: Implement full button state machine logic
-  }
-}
