@@ -10,7 +10,8 @@ depends: []
 === END MANIFEST === */
 // clang-format on
 
-#include "libxr.hpp"
+#include "app_framework.hpp"
+#include "gpio.hpp"
 #include <cstdint>
 #include <cstring>
 
@@ -71,8 +72,7 @@ public:
     const char *key_alias;      ///< Button name that triggered event
     ButtonEvent event_type;     ///< Type of event that occurred
     ButtonStateBits state_bits; ///< Current state of all buttons
-    uint16_t long_press_period_trigger_cnt; ///< Count of long press periods
-                                            ///< triggered
+    uint16_t long_press_count;  ///< Count of long press periods triggered
   };
 
   /**
@@ -84,8 +84,7 @@ public:
    */
   BitsButtonXR(LibXR::HardwareContainer &hw, LibXR::ApplicationManager &app,
                std::initializer_list<SingleButtonConfig> single_buttons,
-               std::initializer_list<CombinedButtonConfig> combined_buttons)
-      : LibXR::Application(hw, app) {
+               std::initializer_list<CombinedButtonConfig> combined_buttons) {
     InitializeSingleButtons(hw, single_buttons);
     InitializeCombinedButtons(combined_buttons);
   }
@@ -104,8 +103,9 @@ private:
     ButtonState last_state;        ///< Previous state machine state
     ButtonStateBits state_bits;    ///< Bit mask for this button
     ButtonConstraints constraints; ///< Timing constraints
-    LibXR::Timer state_timer;       ///< Timer for state timing management
-    LibXR::GPIO *gpio_handle;      ///< GPIO handle for reading button state
+    LibXR::Timer::TimerHandle
+        state_timer;          ///< Timer handle for state timing management
+    LibXR::GPIO *gpio_handle; ///< GPIO handle for reading button state
     bool active_level;  ///< GPIO level for button press (false=low, true=high)
     uint8_t button_bit; ///< Bit position in mask
   };
@@ -123,8 +123,10 @@ private:
   LibXR::Event button_events_;
 
   /** Current and previous button states for change detection */
-  ButtonMaskType current_mask_ = 0; ///< Current button state mask
-  ButtonMaskType last_mask_ = 0;    ///< Previous button state mask
+  [[maybe_unused]] ButtonMaskType current_mask_ =
+      0; ///< Current button state mask
+  [[maybe_unused]] ButtonMaskType last_mask_ =
+      0; ///< Previous button state mask
 
   /** Storage for button configurations and states */
   [[maybe_unused]] std::array<SingleButton, BITS_BTN_MAX_SINGLES>
@@ -160,7 +162,10 @@ private:
                                .last_state = ButtonState::IDLE,
                                .state_bits = 0,
                                .constraints = cfg.constraints,
-                               .state_entry_time = 0,
+                               .state_timer = LibXR::Timer::CreateTask<void *>(
+                                   BitsButtonXR::ButtonStateTimerCallback,
+                                   static_cast<void *>(&single_buttons_.at(i)),
+                                   cfg.constraints.short_press_time_ms),
                                .gpio_handle = gpio_handle,
                                .active_level = cfg.active_level,
                                .button_bit = static_cast<uint8_t>(i)};
@@ -202,6 +207,12 @@ private:
 
     return LibXR::ErrorCode::OK;
   }
+
+  /**
+   * @brief Timer callback function for button state management
+   * @param button Pointer to the button instance
+   */
+  static void ButtonStateTimerCallback(void *arg);
 
   /**
    * @brief Sort combined buttons by key count in descending order
@@ -297,3 +308,23 @@ private:
     return LibXR::ErrorCode::OK;
   }
 };
+
+void BitsButtonXR::ButtonStateTimerCallback(void *arg) {
+  // Timer callback for button state management
+  // This function will be called periodically to handle button state
+  // transitions Implementation details would depend on the specific button
+  // state machine logic
+  SingleButton *button = static_cast<SingleButton *>(arg);
+  if (button && button->gpio_handle) {
+    // Read the current GPIO state
+    bool current_level = button->gpio_handle->Read();
+    UNUSED(current_level);
+    bool is_pressed = (current_level == button->active_level);
+    UNUSED(is_pressed);
+
+    // Update state machine based on current input and constraints
+    // This is a placeholder - actual state machine logic would be implemented
+    // here
+    // TODO: Implement full button state machine logic
+  }
+}
