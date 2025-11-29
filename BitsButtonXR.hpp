@@ -3,7 +3,7 @@
 // clang-format off
 /* === MODULE MANIFEST V2 ===
 module_description: BitsButtonXR module for button management
-constructor_args: []
+constructor_args: [hw, app, single_buttons, combined_buttons]
 template_args: []
 required_hardware: []
 depends: []
