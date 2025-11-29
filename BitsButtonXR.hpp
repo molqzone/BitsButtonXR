@@ -3,7 +3,23 @@
 // clang-format off
 /* === MODULE MANIFEST V2 ===
 module_description: BitsButtonXR module for button management
-constructor_args: [hw, app, single_buttons, combined_buttons]
+constructor_args:
+  single_buttons:
+    - key_alias: "btn1"
+      active_level: false
+      constraints:
+        short_press_time_ms: 50
+        long_press_start_time_ms: 1000
+        long_press_period_triger_ms: 500
+        time_window_time_ms: 300
+    - key_alias: "btn2"
+      active_level: false
+      constraints:
+        short_press_time_ms: 50
+        long_press_start_time_ms: 1000
+        long_press_period_triger_ms: 500
+        time_window_time_ms: 300
+  combined_buttons: []
 template_args: []
 required_hardware: []
 depends: []
