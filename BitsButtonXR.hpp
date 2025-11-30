@@ -101,7 +101,8 @@ public:
    */
   BitsButtonXR(LibXR::HardwareContainer &hw, LibXR::ApplicationManager &app,
                std::initializer_list<SingleButtonConfig> single_buttons,
-               std::initializer_list<CombinedButtonConfig> combined_buttons) {
+               std::initializer_list<CombinedButtonConfig> combined_buttons)
+      : LibXR::Application() {
     InitializeSingleButtons(hw, single_buttons);
     InitializeCombinedButtons(combined_buttons);
   }
@@ -160,9 +161,8 @@ private:
    * @param configs List of button configurations
    * @return Error code indicating success or failure
    */
-  LibXR::ErrorCode
-  InitializeSingleButtons(LibXR::HardwareContainer &hw,
-                          std::initializer_list<SingleButtonConfig> configs) {
+  LibXR::ErrorCode InitializeSingleButtons(LibXR::HardwareContainer &hw,
+                                         std::initializer_list<SingleButtonConfig> configs) {
     if (configs.size() > BITS_BTN_MAX_SINGLES) {
       return LibXR::ErrorCode::SIZE_ERR;
     }
