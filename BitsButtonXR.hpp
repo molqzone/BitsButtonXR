@@ -573,7 +573,7 @@ private:
     }
 
     /* Global debounce */
-    if (new_mask != instance->current_mask_) {
+    if (new_mask != instance->last_mask_) {
       instance->last_mask_ = new_mask;
       instance->mask_update_tick_ = current_tick;
     }
