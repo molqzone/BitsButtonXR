@@ -264,8 +264,8 @@ private:
                                 LibXR::GPIO::Pull::DOWN});
       }
 
-      auto button_on_click_cb = [](bool, BitsButtonXR &instance) {
-        instance.WakeUpFromIsr();
+      auto button_on_click_cb = [](bool, BitsButtonXR *instance) {
+        instance->WakeUpFromIsr();
       };
 
       auto gpio_callback =
