@@ -49,7 +49,6 @@ public:
   using ButtonStateBits = uint32_t;
   using ButtonMaskType = uint32_t;
 
-  /** Timing constraints for button behavior detection */
   struct ButtonConstraints {
     uint16_t short_press_time_ms;         ///< Time threshold for short press
     uint16_t long_press_start_time_ms;    ///< Time when long press starts
@@ -57,7 +56,6 @@ public:
     uint16_t time_window_time_ms;         ///< Window for double click detection
   };
 
-  /** Configuration for combined button patterns */
   struct CombinedButtonConfig {
     const char *combined_alias; ///< Name identifier for the combination
     bool suppress_single_keys; ///< Whether to suppress individual button events
@@ -65,15 +63,12 @@ public:
     const uint8_t *button_indices; ///< Array of button indices
   };
 
-  /** Configuration for individual single buttons */
   struct SingleButtonConfig {
-    const char *key_alias; ///< GPIO name identifier for the button
-    bool active_level; ///< GPIO level that indicates button press (false=low,
-                       ///< true=high)
+    const char *key_alias;         ///< GPIO name identifier for the button
+    bool active_level;             ///< GPIO level that indicates button press
     ButtonConstraints constraints; ///< Timing constraints for this button
   };
 
-  /** Result structure for button events */
   struct ButtonEventResult {
     const char *key_alias;      ///< Button name that triggered event
     ButtonEvent event_type;     ///< Type of event that occurred
@@ -105,7 +100,10 @@ public:
     InitializeCombinedButtons(combined_buttons);
   }
 
-  /** @brief Get the event handle for button events */
+  /**
+   * @brief Get the event handle for button events
+   * @return Event handle for button notifications
+   */
   LibXR::Event GetEventHandle() { return button_events_; }
 
   /**
@@ -127,7 +125,6 @@ public:
    * otherwise
    */
   bool GetEventResult(ButtonEventResult &out_result) {
-    // Pop both gets data and removes it from queue (consumes the event)
     return result_queue_.Pop(out_result) == LibXR::ErrorCode::OK;
   }
 
@@ -136,13 +133,16 @@ public:
    * @param out_result Reference to store the event result
    * @return True if event was successfully retrieved, false otherwise
    * @note Event remains in queue for other callbacks to see. Typically,
-   * event-driven models use "consume" pattern, so GetEventResult is more common
+   * event-driven models use "consume" pattern, so GetEventResult is more
+   * common
    */
   bool PeekEventResult(ButtonEventResult &out_result) {
     return result_queue_.Peek(out_result) == LibXR::ErrorCode::OK;
   }
 
-  /** @brief Monitor function called by application framework */
+  /**
+   * @brief Monitor function called by application framework
+   */
   void OnMonitor() override {}
 
 private:
@@ -159,25 +159,20 @@ private:
     FINISH = 5
   };
 
-  /** Internal state for a single button */
   struct SingleButton {
-    /* Static configuration */
     const char *key_alias;         ///< Alias name for the button
     LibXR::GPIO *gpio_handle;      ///< Hardware handle
     bool active_level;             ///< Active level for button press
     ButtonConstraints constraints; ///< Timing parameters
     uint8_t logic_index;           ///< Logical index
 
-    /* Dynamic state */
     InternalState current_state; ///< Current state machine state
     ButtonStateBits state_bits;  ///< Click history (0b10, 0b1010...)
 
-    /* Timing and counting */
     uint32_t state_entry_tick; ///< Global tick value entering current state
     uint16_t long_press_cnt;   ///< Long press event triggered count
   };
 
-  /** Internal state for a combined button pattern */
   struct CombinedButton {
     SingleButton combined_btn;    ///< Embedded button state machine
     ButtonMaskType combined_mask; ///< Bit mask of buttons in this combo
@@ -186,36 +181,38 @@ private:
     bool is_active;               ///< Whether this combo is currently active
   };
 
-  /** Event system for button notifications */
-  LibXR::Event button_events_;
-  LibXR::LockFreeQueue<ButtonEventResult> result_queue_;
+  LibXR::Event button_events_; ///< Event system for button notifications
+  LibXR::LockFreeQueue<ButtonEventResult>
+      result_queue_; ///< Queue for event results
 
-  /** Global timer handle for state timing management */
-  LibXR::Timer::TimerHandle state_timer_;
+  LibXR::Timer::TimerHandle
+      state_timer_; ///< Global timer handle for state timing management
 
-  /** Flag to indicate if the system is in active polling mode */
-  volatile bool is_polling_active_ = false;
+  volatile bool is_polling_active_ = false; ///< Flag for active polling mode
 
-  /** Timestamp when the button mask last changed (for global debounce) */
-  uint32_t mask_update_tick_ = 0;
+  uint32_t mask_update_tick_ = 0; ///< Timestamp when button mask last changed
 
-  /** Counter to delay sleep (Hysteresis) after buttons are released */
-  uint32_t idle_counter_ = 0;
+  uint32_t idle_hysteresis_ =
+      0; ///< Counter to delay sleep after button release
 
-  /** Current and previous button states for change detection */
+  uint32_t active_logic_count_ = 0; ///< Count of buttons in non-IDLE state
+
+  uint32_t valid_single_count_ = 0;   ///< Count of valid single buttons
+  uint32_t valid_combined_count_ = 0; ///< Count of valid combined buttons
+
+  inline void RecordHistory(SingleButton &btn, bool pressed) {
+    btn.state_bits = (btn.state_bits << 1) | (pressed ? 1 : 0);
+  }
+
   [[maybe_unused]] ButtonMaskType current_mask_ =
       0; ///< Current button state mask
   [[maybe_unused]] ButtonMaskType last_mask_ =
       0; ///< Previous button state mask
 
-  /** Storage for button configurations and states */
   [[maybe_unused]] std::array<SingleButton, BITS_BTN_MAX_SINGLES>
       single_buttons_{}; ///< Array of single button states
   [[maybe_unused]] std::array<CombinedButton, BITS_BTN_MAX_COMBINED>
       combined_buttons_{}; ///< Array of combined button states
-
-  /** Index array for sorted access to combined buttons */
-  std::array<uint16_t, BITS_BTN_MAX_COMBINED> sorted_indices_{};
 
   /**
    * @brief Initialize single button configurations
@@ -230,6 +227,7 @@ private:
       return LibXR::ErrorCode::SIZE_ERR;
     }
 
+    valid_single_count_ = 0;
     for (size_t i = 0; i < configs.size(); ++i) {
       const auto &cfg = *(configs.begin() + i);
       LibXR::GPIO *gpio_handle = hw.template Find<LibXR::GPIO>(cfg.key_alias);
@@ -244,18 +242,14 @@ private:
                                .constraints = cfg.constraints,
                                .logic_index = static_cast<uint8_t>(i),
 
-                               /* Dynamic state */
                                .current_state = InternalState::IDLE,
                                .state_bits = 0,
 
-                               /* Timing and counting */
                                .state_entry_tick = 0,
                                .long_press_cnt = 0};
 
-      // TODO: Register GPIO interrupt/callback to read button state
-      // gpio_handle->RegisterCallback(...);
+      valid_single_count_++;
 
-      /* GPIO Initializing */
       if (cfg.active_level) {
         gpio_handle->SetConfig({LibXR::GPIO::Direction::FALL_RISING_INTERRUPT,
                                 LibXR::GPIO::Pull::UP});
@@ -302,7 +296,6 @@ private:
         return LibXR::ErrorCode::OUT_OF_RANGE;
       }
 
-      // Set bit for this button in the mask
       mask |= static_cast<ButtonMaskType>(1UL) << button_index;
     }
 
@@ -314,40 +307,25 @@ private:
    * @param count Number of valid combined buttons to sort
    */
   void SortCombinedButtonsDescending(size_t count) {
-    // Early exit for trivial cases
     if (count <= 1) {
       return;
     }
 
-    // Validate count against array bounds
     if (count > combined_buttons_.size()) {
       count = combined_buttons_.size();
     }
 
-    // Initialize index array (0,1,2,...)
-    for (size_t i = 0; i < count; ++i) {
-      sorted_indices_.at(i) = static_cast<uint16_t>(i);
-    }
-
-    // Insertion sort on index array in descending order by key_count
-    // This ensures that button combinations with more keys are checked first,
-    // preventing false positives where smaller combinations match larger ones
     for (size_t i = 1; i < count; ++i) {
-      uint16_t curr_idx = sorted_indices_.at(i);
-      uint8_t curr_keys = combined_buttons_.at(curr_idx).key_count;
+      CombinedButton curr_btn = combined_buttons_.at(i);
+      uint8_t curr_keys = curr_btn.key_count;
       int16_t pos = static_cast<int16_t>(i - 1);
 
-      // Find insertion position: higher key count has higher priority
-      // Shift indices of buttons with lower key count to the right
-      while (pos >= 0 &&
-             combined_buttons_.at(sorted_indices_.at(pos)).key_count <
-                 curr_keys) {
-        sorted_indices_.at(pos + 1) = sorted_indices_.at(pos);
+      while (pos >= 0 && combined_buttons_.at(pos).key_count < curr_keys) {
+        combined_buttons_.at(pos + 1) = combined_buttons_.at(pos);
         pos--;
       }
 
-      // Insert current button index at correct position
-      sorted_indices_.at(pos + 1) = curr_idx;
+      combined_buttons_.at(pos + 1) = curr_btn;
     }
   }
 
@@ -362,42 +340,37 @@ private:
       return LibXR::ErrorCode::SIZE_ERR;
     }
 
-    // Validate all configs before processing to fail fast
     for (const auto &cfg : configs) {
       if (!cfg.combined_alias || cfg.key_count == 0 || !cfg.button_indices) {
         return LibXR::ErrorCode::ARG_ERR;
       }
     }
 
-    size_t combined_index = 0;
+    valid_combined_count_ = 0;
+    size_t insert_pos = 0;
 
-    // First pass: Calculate combined masks and collect metadata
     for (const auto &cfg : configs) {
       ButtonMaskType mask = 0;
 
-      // Calculate combined mask using the helper function
       auto ec = CalculateCombinedMask(cfg.button_indices, cfg.key_count, mask);
       if (ec != LibXR::ErrorCode::OK) {
         return LibXR::ErrorCode::ARG_ERR;
       }
 
-      // Fill runtime structure using std::array::at() for bounds safety
-      auto &combined_btn = combined_buttons_.at(combined_index);
+      auto &combined_btn = combined_buttons_.at(insert_pos);
       combined_btn.combined_mask = mask;
       combined_btn.key_count = cfg.key_count;
       combined_btn.suppress_single_keys = cfg.suppress_single_keys;
       combined_btn.is_active = true;
 
-      // Initialize embedded SingleButton state machine
       combined_btn.combined_btn.key_alias = cfg.combined_alias;
       combined_btn.combined_btn.current_state = InternalState::IDLE;
-      // Combined buttons don't need GPIO handle and active_level
       combined_btn.combined_btn.gpio_handle = nullptr;
 
-      ++combined_index;
+      valid_combined_count_++;
     }
 
-    SortCombinedButtonsDescending(combined_index);
+    SortCombinedButtonsDescending(valid_combined_count_);
 
     return LibXR::ErrorCode::OK;
   }
@@ -411,25 +384,19 @@ private:
     ButtonEventResult res = {btn.key_alias, type, btn.state_bits,
                              btn.long_press_cnt, LibXR::Thread::GetTime()};
 
-    // Push to queue
-    // If queue is full (ErrorCode != OK), you can choose to ignore or log error
-    // However, a depth of 16 will never be full for human button presses,
-    // unless callbacks are stuck
     result_queue_.Push(res);
 
-    // Send notification signal
     button_events_.Active(MakeEventId(btn.logic_index, type));
   }
 
-  void WakeUpFromIsr() {
-    // Avoid redundant wake-ups
+  inline void WakeUpFromIsr() {
     if (is_polling_active_) {
       return;
     }
 
     LibXR::Timer::Start(state_timer_);
     is_polling_active_ = true;
-    idle_counter_ = 0;
+    idle_hysteresis_ = 0;
 
     for (auto &btn : single_buttons_) {
       if (btn.gpio_handle) {
@@ -438,29 +405,19 @@ private:
     }
   }
 
-  void CheckAndEnterSleep() {
-    // Check whether all the buttons are idle for a certain period
-    if (current_mask_ != 0) {
-      idle_counter_ = 0;
+  inline void CheckAndEnterSleep() {
+    if (current_mask_ != 0 || active_logic_count_ > 0) {
+      idle_hysteresis_ = 0;
       return;
     }
 
-    // All the states are IDLE
-    for (auto &btn : single_buttons_) {
-      if (btn.current_state != InternalState::IDLE) {
-        idle_counter_ = 0;
-        return;
-      }
-    }
-
-    // Hysteresis counter to avoid rapid sleep/wake cycles
-    idle_counter_++;
-    if (idle_counter_ > IDLE_SLEEP_THRESHOLD) {
+    idle_hysteresis_++;
+    if (idle_hysteresis_ > IDLE_SLEEP_THRESHOLD) {
       EnterSleepMode();
     }
   }
 
-  void EnterSleepMode() {
+  inline void EnterSleepMode() {
     LibXR::Timer::Stop(state_timer_);
     is_polling_active_ = false;
 
@@ -479,32 +436,29 @@ private:
    */
   void UpdateSingleButtonState(SingleButton &btn, bool is_pressed,
                                uint32_t current_tick) {
+    auto old_state = btn.current_state;
+
     uint32_t elapsed_ms = current_tick - btn.state_entry_tick;
 
     switch (btn.current_state) {
     case InternalState::IDLE:
       if (is_pressed) {
-        // IDLE -> PRESSED
         btn.current_state = InternalState::PRESSED;
         btn.state_entry_tick = current_tick;
-        // Record click bit (1)
-        btn.state_bits = (btn.state_bits << 1) | 1;
+        RecordHistory(btn, true);
         EmitEvent(btn, ButtonEvent::PRESSED);
       }
       break;
 
     case InternalState::PRESSED:
       if (!is_pressed) {
-        // PRESSED -> RELEASE
         btn.current_state = InternalState::RELEASE;
         btn.state_entry_tick = current_tick;
       } else if (elapsed_ms > btn.constraints.long_press_start_time_ms) {
-        // PRESSED -> LONG_PRESS
         btn.current_state = InternalState::LONG_PRESS;
         btn.state_entry_tick = current_tick;
         btn.long_press_cnt = 0;
-        // Record long press bit (1)
-        btn.state_bits = (btn.state_bits << 1) | 1;
+        RecordHistory(btn, true);
         EmitEvent(btn, ButtonEvent::LONG_PRESS_START);
       }
       break;
@@ -514,16 +468,14 @@ private:
         btn.current_state = InternalState::RELEASE;
         btn.state_entry_tick = current_tick;
       } else if (elapsed_ms > btn.constraints.long_press_period_triger_ms) {
-        // Periodic trigger
-        btn.state_entry_tick = current_tick; // Reset time for next period
+        btn.state_entry_tick = current_tick;
         btn.long_press_cnt++;
         EmitEvent(btn, ButtonEvent::LONG_PRESS_HOLD);
       }
       break;
 
     case InternalState::RELEASE:
-      // Record release bit (0)
-      btn.state_bits = (btn.state_bits << 1) | 0;
+      RecordHistory(btn, false);
       EmitEvent(btn, ButtonEvent::RELEASED);
 
       btn.current_state = InternalState::RELEASE_WINDOW;
@@ -532,23 +484,26 @@ private:
 
     case InternalState::RELEASE_WINDOW:
       if (is_pressed) {
-        // Pressed again within window period, go back to IDLE to handle Pressed
-        // in next loop This way state_bits will accumulate, forming
-        // double-click logic
         btn.current_state = InternalState::IDLE;
-        // Do not reset state_bits
       } else if (elapsed_ms > btn.constraints.time_window_time_ms) {
-        // Timeout, click finished
         btn.current_state = InternalState::FINISH;
       }
       break;
 
     case InternalState::FINISH:
       EmitEvent(btn, ButtonEvent::CLICK_FINISH);
-      // Finish, reset all states
       btn.state_bits = 0;
       btn.current_state = InternalState::IDLE;
       break;
+    }
+
+    bool was_active = (old_state != InternalState::IDLE);
+    bool is_active = (btn.current_state != InternalState::IDLE);
+
+    if (!was_active && is_active) {
+      active_logic_count_++;
+    } else if (was_active && !is_active) {
+      active_logic_count_--;
     }
   }
 
@@ -557,84 +512,61 @@ private:
    * @param instance Pointer to the BitsButtonXR instance
    */
   static void StateTimerOnTick(BitsButtonXR *instance) {
-    if (!instance) {
+    uint32_t now = LibXR::Thread::GetTime();
+
+    ButtonMaskType new_mask = 0;
+    for (size_t i = 0; i < instance->valid_single_count_; ++i) {
+      auto &btn = instance->single_buttons_[i];
+      new_mask |= (btn.gpio_handle->Read() == btn.active_level)
+                      ? (1UL << btn.logic_index)
+                      : 0;
+    }
+
+    if (new_mask != instance->last_mask_) {
+      instance->last_mask_ = new_mask;
+      instance->mask_update_tick_ = now;
       return;
     }
 
-    uint32_t current_tick = LibXR::Thread::GetTime();
-
-    /* Snapshot current button mask */
-    ButtonMaskType new_mask = 0;
-    for (size_t i = 0; i < BITS_BTN_MAX_SINGLES; ++i) {
-      auto &btn = instance->single_buttons_.at(i);
-      if (btn.gpio_handle && btn.gpio_handle->Read() == btn.active_level) {
-        new_mask |= static_cast<ButtonMaskType>(1UL) << i;
-      }
+    if (now - instance->mask_update_tick_ < DEBOUNCE_TIME_MS) {
+      return;
     }
 
-    /* Global debounce */
-    if (new_mask != instance->last_mask_) {
-      instance->last_mask_ = new_mask;
-      instance->mask_update_tick_ = current_tick;
-    }
-
-    // Check whether debounce time has passed
-    if ((current_tick - instance->mask_update_tick_) < DEBOUNCE_TIME_MS) {
-      return; // Still within debounce period, skip processing
-    }
-
-    // Update current mask after debounce
     instance->current_mask_ = new_mask;
 
-    /* Dispatching */
-    ButtonMaskType suppression_mask = 0;
+    ButtonMaskType suppression = 0;
+    for (size_t i = 0; i < instance->valid_combined_count_; ++i) {
+      auto &combo = instance->combined_buttons_[i];
 
-    // Combined Buttons Processing
-    for (size_t i = 0; i < instance->combined_buttons_.size(); ++i) {
-      // Ensuring processing in sorted order
-      uint16_t idx = instance->sorted_indices_[i];
-      if (idx >= instance->combined_buttons_.size()) {
-        continue;
-      }
+      bool match = (instance->current_mask_ & combo.combined_mask) ==
+                   combo.combined_mask;
 
-      auto &combined = instance->combined_buttons_[idx];
-      if (combined.key_count == 0) {
-        continue;
-      }
+      instance->UpdateSingleButtonState(combo.combined_btn, match, now);
 
-      // Check if combination matches
-      bool match = (instance->current_mask_ & combined.combined_mask) ==
-                   combined.combined_mask;
-
-      instance->UpdateSingleButtonState(combined.combined_btn, match,
-                                        current_tick);
-
-      // If matched or still active, consider suppressing single keys
-      if (match || combined.combined_btn.current_state != InternalState::IDLE) {
-        if (combined.suppress_single_keys) {
-          suppression_mask |= combined.combined_mask;
+      if (match || combo.combined_btn.current_state != InternalState::IDLE) {
+        if (combo.suppress_single_keys) {
+          suppression |= combo.combined_mask;
         }
       }
     }
 
-    // Single Buttons Processing
-    for (auto &btn : instance->single_buttons_) {
-      if (!btn.gpio_handle) {
+    for (size_t i = 0; i < instance->valid_single_count_; ++i) {
+      auto &btn = instance->single_buttons_[i];
+      if (suppression & (1UL << btn.logic_index)) {
         continue;
       }
 
-      // Skip buttons suppressed by combined buttons
-      if (suppression_mask & (1UL << btn.logic_index)) {
-        continue;
-      }
-
-      // Check if button is pressed
-      bool is_pressed = (instance->current_mask_ & (1UL << btn.logic_index));
-
-      instance->UpdateSingleButtonState(btn, is_pressed, current_tick);
+      bool pressed = (instance->current_mask_ & (1UL << btn.logic_index));
+      instance->UpdateSingleButtonState(btn, pressed, now);
     }
 
-    /* Check for sleep condition */
-    instance->CheckAndEnterSleep();
+    if (instance->current_mask_ == 0 && instance->active_logic_count_ == 0) {
+      instance->idle_hysteresis_++;
+      if (instance->idle_hysteresis_ > IDLE_SLEEP_THRESHOLD) {
+        instance->EnterSleepMode();
+      }
+    } else {
+      instance->idle_hysteresis_ = 0;
+    }
   }
 };
