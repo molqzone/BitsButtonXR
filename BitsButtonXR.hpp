@@ -127,8 +127,11 @@ public:
     ASSERT(index <= BITS_BTN_MAX_SINGLES + BITS_BTN_MAX_COMBINED);
     ASSERT(static_cast<uint32_t>(type) <= EVENT_ID_TYPE_MASK);
 
-    return (static_cast<uint32_t>(index) << EVENT_ID_INDEX_SHIFT) |
-           (static_cast<uint32_t>(type) << EVENT_ID_TYPE_SHIFT);
+    // Force masking even in release to prevent bit corruption
+    return ((static_cast<uint32_t>(index) & EVENT_ID_INDEX_MASK)
+            << EVENT_ID_INDEX_SHIFT) |
+           ((static_cast<uint32_t>(type) & EVENT_ID_TYPE_MASK)
+            << EVENT_ID_TYPE_SHIFT);
   }
 
   /**
@@ -208,14 +211,8 @@ private:
   uint32_t idle_hysteresis_ =
       0; ///< Counter to delay sleep after button release
 
-  uint32_t active_logic_count_ = 0; ///< Count of buttons in non-IDLE state
-
   uint32_t valid_single_count_ = 0;   ///< Count of valid single buttons
   uint32_t valid_combined_count_ = 0; ///< Count of valid combined buttons
-
-  inline void RecordHistory(SingleButton &btn, bool pressed) {
-    btn.state_bits = (btn.state_bits << 1) | (pressed ? 1 : 0);
-  }
 
   [[maybe_unused]] ButtonMaskType current_mask_ =
       0; ///< Current button state mask
@@ -226,6 +223,10 @@ private:
       single_buttons_{}; ///< Array of single button states
   [[maybe_unused]] std::array<CombinedButton, BITS_BTN_MAX_COMBINED>
       combined_buttons_{}; ///< Array of combined button states
+
+  void RecordHistory(SingleButton &btn, bool pressed) {
+    btn.state_bits = (btn.state_bits << 1) | (pressed ? 1 : 0);
+  }
 
   /**
    * @brief Initialize single button configurations
@@ -402,7 +403,7 @@ private:
     button_events_.Active(MakeEventId(btn.logic_index, type));
   }
 
-  inline void WakeUpFromIsr() {
+  void WakeUpFromIsr() {
     if (is_polling_active_) {
       return;
     }
@@ -418,19 +419,10 @@ private:
     }
   }
 
-  inline void CheckAndEnterSleep() {
-    if (current_mask_ != 0 || active_logic_count_ > 0) {
-      idle_hysteresis_ = 0;
-      return;
-    }
+  // CheckAndEnterSleep removed - logic now integrated directly into
+  // StateTimerOnTick for better performance and no redundant array traversals
 
-    idle_hysteresis_++;
-    if (idle_hysteresis_ > IDLE_SLEEP_THRESHOLD) {
-      EnterSleepMode();
-    }
-  }
-
-  inline void EnterSleepMode() {
+  void EnterSleepMode() {
     LibXR::Timer::Stop(state_timer_);
     is_polling_active_ = false;
 
@@ -449,8 +441,6 @@ private:
    */
   void UpdateSingleButtonState(SingleButton &btn, bool is_pressed,
                                uint32_t current_tick) {
-    auto old_state = btn.current_state;
-
     uint32_t elapsed_ms = current_tick - btn.state_entry_tick;
 
     switch (btn.current_state) {
@@ -509,15 +499,6 @@ private:
       btn.current_state = InternalState::IDLE;
       break;
     }
-
-    bool was_active = (old_state != InternalState::IDLE);
-    bool is_active = (btn.current_state != InternalState::IDLE);
-
-    if (!was_active && is_active) {
-      active_logic_count_++;
-    } else if (was_active && !is_active) {
-      active_logic_count_--;
-    }
   }
 
   /**
@@ -548,17 +529,24 @@ private:
     instance->current_mask_ = new_mask;
 
     ButtonMaskType suppression = 0;
+    uint32_t active_count = 0;
+
     for (size_t i = 0; i < instance->valid_combined_count_; ++i) {
-      auto &combo = instance->combined_buttons_[i];
+      auto &combined = instance->combined_buttons_[i];
 
-      bool match = (instance->current_mask_ & combo.combined_mask) ==
-                   combo.combined_mask;
+      bool match = (instance->current_mask_ & combined.combined_mask) ==
+                   combined.combined_mask;
 
-      instance->UpdateSingleButtonState(combo.combined_btn, match, now);
+      instance->UpdateSingleButtonState(combined.combined_btn, match, now);
 
-      if (match || combo.combined_btn.current_state != InternalState::IDLE) {
-        if (combo.suppress_single_keys) {
-          suppression |= combo.combined_mask;
+      // Count combined button immediately after update
+      if (combined.combined_btn.current_state != InternalState::IDLE) {
+        active_count++;
+      }
+
+      if (match || combined.combined_btn.current_state != InternalState::IDLE) {
+        if (combined.suppress_single_keys) {
+          suppression |= combined.combined_mask;
         }
       }
     }
@@ -566,14 +554,23 @@ private:
     for (size_t i = 0; i < instance->valid_single_count_; ++i) {
       auto &btn = instance->single_buttons_[i];
       if (suppression & (1UL << btn.logic_index)) {
+        // Count suppressed buttons if they're active
+        if (btn.current_state != InternalState::IDLE) {
+          active_count++;
+        }
         continue;
       }
 
       bool pressed = (instance->current_mask_ & (1UL << btn.logic_index));
       instance->UpdateSingleButtonState(btn, pressed, now);
+
+      if (btn.current_state != InternalState::IDLE) {
+        active_count++;
+      }
     }
 
-    if (instance->current_mask_ == 0 && instance->active_logic_count_ == 0) {
+    // Direct sleep check
+    if (instance->current_mask_ == 0 && active_count == 0) {
       instance->idle_hysteresis_++;
       if (instance->idle_hysteresis_ > IDLE_SLEEP_THRESHOLD) {
         instance->EnterSleepMode();
@@ -581,27 +578,5 @@ private:
     } else {
       instance->idle_hysteresis_ = 0;
     }
-
-#ifdef LIBXR_DEBUG_BUILD
-    // Safety Check: Verify active_logic_count_ matches actual non-IDLE button
-    // count
-    uint32_t actual_active_count = 0;
-
-    for (size_t i = 0; i < instance->valid_single_count_; ++i) {
-      if (instance->single_buttons_[i].current_state != InternalState::IDLE) {
-        actual_active_count++;
-      }
-    }
-
-    for (size_t i = 0; i < instance->valid_combined_count_; ++i) {
-      if (instance->combined_buttons_[i].combined_btn.current_state !=
-          InternalState::IDLE) {
-        actual_active_count++;
-      }
-    }
-
-    LibXR::Assert::SizeLimitCheck<LibXR::SizeLimitMode::EQUAL>(
-        instance->active_logic_count_, actual_active_count);
-#endif
   }
 };
