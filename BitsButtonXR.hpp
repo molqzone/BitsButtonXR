@@ -479,7 +479,77 @@ private:
    */
   void UpdateSingleButtonState(SingleButton &btn, bool is_pressed,
                                uint32_t current_tick) {
-    // TODO: Implement state machine logic
+    uint32_t elapsed_ms = current_tick - btn.state_entry_tick;
+
+    switch (btn.current_state) {
+    case InternalState::IDLE:
+      if (is_pressed) {
+        // IDLE -> PRESSED
+        btn.current_state = InternalState::PRESSED;
+        btn.state_entry_tick = current_tick;
+        // Record click bit (1)
+        btn.state_bits = (btn.state_bits << 1) | 1;
+        EmitEvent(btn, ButtonEvent::PRESSED);
+      }
+      break;
+
+    case InternalState::PRESSED:
+      if (!is_pressed) {
+        // PRESSED -> RELEASE
+        btn.current_state = InternalState::RELEASE;
+        btn.state_entry_tick = current_tick;
+      } else if (elapsed_ms > btn.constraints.long_press_start_time_ms) {
+        // PRESSED -> LONG_PRESS
+        btn.current_state = InternalState::LONG_PRESS;
+        btn.state_entry_tick = current_tick;
+        btn.long_press_cnt = 0;
+        // Record long press bit (1)
+        btn.state_bits = (btn.state_bits << 1) | 1;
+        EmitEvent(btn, ButtonEvent::LONG_PRESS_START);
+      }
+      break;
+
+    case InternalState::LONG_PRESS:
+      if (!is_pressed) {
+        btn.current_state = InternalState::RELEASE;
+        btn.state_entry_tick = current_tick;
+      } else if (elapsed_ms > btn.constraints.long_press_period_triger_ms) {
+        // Periodic trigger
+        btn.state_entry_tick = current_tick; // Reset time for next period
+        btn.long_press_cnt++;
+        EmitEvent(btn, ButtonEvent::LONG_PRESS_HOLD);
+      }
+      break;
+
+    case InternalState::RELEASE:
+      // Record release bit (0)
+      btn.state_bits = (btn.state_bits << 1) | 0;
+      EmitEvent(btn, ButtonEvent::RELEASED);
+
+      btn.current_state = InternalState::RELEASE_WINDOW;
+      btn.state_entry_tick = current_tick;
+      break;
+
+    case InternalState::RELEASE_WINDOW:
+      if (is_pressed) {
+        // Pressed again within window period, go back to IDLE to handle Pressed
+        // in next loop This way state_bits will accumulate, forming
+        // double-click logic
+        btn.current_state = InternalState::IDLE;
+        // Do not reset state_bits
+      } else if (elapsed_ms > btn.constraints.time_window_time_ms) {
+        // Timeout, click finished
+        btn.current_state = InternalState::FINISH;
+      }
+      break;
+
+    case InternalState::FINISH:
+      EmitEvent(btn, ButtonEvent::CLICK_FINISH);
+      // Finish, reset all states
+      btn.state_bits = 0;
+      btn.current_state = InternalState::IDLE;
+      break;
+    }
   }
 
   /**
