@@ -38,8 +38,17 @@ depends: []
 
 class BitsButtonXR : public LibXR::Application {
 public:
+  // Event ID bit field layout and constants
+  constexpr static uint8_t EVENT_ID_TYPE_BITS = 8;
+  constexpr static uint8_t EVENT_ID_INDEX_BITS = 8;
+  constexpr static uint8_t EVENT_ID_TYPE_SHIFT = 0;
+  constexpr static uint8_t EVENT_ID_INDEX_SHIFT = 8;
+  constexpr static uint32_t EVENT_ID_TYPE_MASK = 0xFFu;
+  constexpr static uint32_t EVENT_ID_INDEX_MASK = 0xFFu;
+
   enum class ButtonEvent : uint8_t {
     PRESSED = 0,          ///< Button initially pressed
+  using ButtonIndexType = uint8_t;
     LONG_PRESS_START = 1, ///< Long press detected (after threshold)
     LONG_PRESS_HOLD = 2,  ///< Periodic long press hold
     RELEASED = 3,         ///< Button released
@@ -108,14 +117,18 @@ public:
 
   /**
    * @brief Generate event ID for Event::Register
-   * Format: [Reserved 8bit] [Index 8bit] [Type 8bit]
+   * Format: [Reserved 16bit] [Index 8bit] [Type 8bit]
    * @param index Button index (0 ~ N-1). Combined button indices follow single
    * button indices
    * @param type Event type from ButtonEvent enum
    * @return Generated event ID
    */
-  static constexpr uint32_t MakeEventId(uint8_t index, ButtonEvent type) {
-    return (static_cast<uint32_t>(index) << 8) | static_cast<uint32_t>(type);
+  static uint32_t MakeEventId(ButtonIndexType index, ButtonEvent type) {
+    ASSERT(index <= BITS_BTN_MAX_SINGLES + BITS_BTN_MAX_COMBINED);
+    ASSERT(static_cast<uint32_t>(type) <= EVENT_ID_TYPE_MASK);
+
+    return (static_cast<uint32_t>(index) << EVENT_ID_INDEX_SHIFT) |
+           (static_cast<uint32_t>(type) << EVENT_ID_TYPE_SHIFT);
   }
 
   /**
