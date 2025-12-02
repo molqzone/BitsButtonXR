@@ -48,7 +48,6 @@ public:
 
   enum class ButtonEvent : uint8_t {
     PRESSED = 0,          ///< Button initially pressed
-  using ButtonIndexType = uint8_t;
     LONG_PRESS_START = 1, ///< Long press detected (after threshold)
     LONG_PRESS_HOLD = 2,  ///< Periodic long press hold
     RELEASED = 3,         ///< Button released
@@ -57,6 +56,7 @@ public:
 
   using ButtonStateBits = uint32_t;
   using ButtonMaskType = uint32_t;
+  using ButtonIndexType = uint8_t;
 
   struct ButtonConstraints {
     uint16_t short_press_time_ms;         ///< Time threshold for short press
@@ -581,5 +581,27 @@ private:
     } else {
       instance->idle_hysteresis_ = 0;
     }
+
+#ifdef LIBXR_DEBUG_BUILD
+    // Safety Check: Verify active_logic_count_ matches actual non-IDLE button
+    // count
+    uint32_t actual_active_count = 0;
+
+    for (size_t i = 0; i < instance->valid_single_count_; ++i) {
+      if (instance->single_buttons_[i].current_state != InternalState::IDLE) {
+        actual_active_count++;
+      }
+    }
+
+    for (size_t i = 0; i < instance->valid_combined_count_; ++i) {
+      if (instance->combined_buttons_[i].combined_btn.current_state !=
+          InternalState::IDLE) {
+        actual_active_count++;
+      }
+    }
+
+    LibXR::Assert::SizeLimitCheck<LibXR::SizeLimitMode::EQUAL>(
+        instance->active_logic_count_, actual_active_count);
+#endif
   }
 };
