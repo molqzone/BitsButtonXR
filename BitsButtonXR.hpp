@@ -97,6 +97,9 @@ public:
                                               TIMER_INTERVAL_MS)) {
     UNUSED(app);
 
+    /* Ensure state_timer_ is sleeping */
+    LibXR::Timer::Stop(state_timer_);
+
     /* Initialize Buttons Configuration */
     InitializeSingleButtons(hw, single_buttons);
     InitializeCombinedButtons(combined_buttons);
@@ -260,15 +263,15 @@ private:
                                 LibXR::GPIO::Pull::DOWN});
       }
 
-      auto button_on_click_cb = [](bool level, SingleButton *single_button) {
-        // TODO: Trigger the Timer for debounce first
-        UNUSED(level);
-        UNUSED(single_button);
+      auto button_on_click_cb = [](bool, BitsButtonXR &instance) {
+        instance.WakeUpFromIsr();
       };
 
-      auto gpio_callback = LibXR::GPIO::Callback::Create(
-          button_on_click_cb, &single_buttons_.at(i));
+      auto gpio_callback =
+          LibXR::GPIO::Callback::Create(button_on_click_cb, this);
       gpio_handle->RegisterCallback(gpio_callback);
+
+      gpio_handle->EnableInterrupt();
     }
 
     return LibXR::ErrorCode::OK;
