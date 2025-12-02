@@ -148,6 +148,7 @@ public:
 private:
   constexpr static uint16_t TIMER_INTERVAL_MS = 10;
   constexpr static uint32_t IDLE_SLEEP_THRESHOLD = 10;
+  constexpr static uint32_t DEBOUNCE_TIME_MS = 20;
 
   enum class InternalState : uint8_t {
     IDLE = 0,
@@ -471,10 +472,99 @@ private:
   }
 
   /**
+   * @brief Update the state machine for a single button
+   * @param btn Reference to the button state structure
+   * @param is_pressed Current button state (true if pressed)
+   * @param current_tick Current system tick time
+   */
+  void UpdateSingleButtonState(SingleButton &btn, bool is_pressed,
+                               uint32_t current_tick) {
+    // TODO: Implement state machine logic
+  }
+
+  /**
    * @brief Timer callback function for button state management
    * @param instance Pointer to the BitsButtonXR instance
    */
   static void StateTimerOnTick(BitsButtonXR *instance) {
-    // TODO: Read -> Debounce -> Dispatch -> CheckSleep
+    if (!instance) {
+      return;
+    }
+
+    uint32_t current_tick = LibXR::Thread::GetTime();
+
+    /* Snapshot current button mask */
+    ButtonMaskType new_mask = 0;
+    for (size_t i = 0; i < BITS_BTN_MAX_SINGLES; ++i) {
+      auto &btn = instance->single_buttons_.at(i);
+      if (btn.gpio_handle && btn.gpio_handle->Read() == btn.active_level) {
+        new_mask |= static_cast<ButtonMaskType>(1UL) << i;
+      }
+    }
+
+    /* Global debounce */
+    if (new_mask != instance->current_mask_) {
+      instance->last_mask_ = new_mask;
+      instance->mask_update_tick_ = current_tick;
+    }
+
+    // Check whether debounce time has passed
+    if ((current_tick - instance->mask_update_tick_) < DEBOUNCE_TIME_MS) {
+      return; // Still within debounce period, skip processing
+    }
+
+    // Update current mask after debounce
+    instance->current_mask_ = new_mask;
+
+    /* Dispatching */
+    ButtonMaskType suppression_mask = 0;
+
+    // Combined Buttons Processing
+    for (size_t i = 0; i < instance->combined_buttons_.size(); ++i) {
+      // Ensuring processing in sorted order
+      uint16_t idx = instance->sorted_indices_[i];
+      if (idx >= instance->combined_buttons_.size()) {
+        continue;
+      }
+
+      auto &combined = instance->combined_buttons_[idx];
+      if (combined.key_count == 0) {
+        continue;
+      }
+
+      // Check if combination matches
+      bool match = (instance->current_mask_ & combined.combined_mask) ==
+                   combined.combined_mask;
+
+      instance->UpdateSingleButtonState(combined.combined_btn, match,
+                                        current_tick);
+
+      // If matched or still active, consider suppressing single keys
+      if (match || combined.combined_btn.current_state != InternalState::IDLE) {
+        if (combined.suppress_single_keys) {
+          suppression_mask |= combined.combined_mask;
+        }
+      }
+    }
+
+    // Single Buttons Processing
+    for (auto &btn : instance->single_buttons_) {
+      if (!btn.gpio_handle) {
+        continue;
+      }
+
+      // Skip buttons suppressed by combined buttons
+      if (suppression_mask & (1UL << btn.logic_index)) {
+        continue;
+      }
+
+      // Check if button is pressed
+      bool is_pressed = (instance->current_mask_ & (1UL << btn.logic_index));
+
+      instance->UpdateSingleButtonState(btn, is_pressed, current_tick);
+    }
+
+    /* Check for sleep condition */
+    instance->CheckAndEnterSleep();
   }
 };
