@@ -30,6 +30,7 @@ depends: []
 #include "gpio.hpp"
 #include "libxr_def.hpp"
 #include "timer.hpp"
+#include <atomic>
 #include <cstdint>
 
 #define BITS_BTN_MAX_SINGLES 32
@@ -164,7 +165,8 @@ public:
 private:
   constexpr static uint16_t TIMER_INTERVAL_MS = 10;
   constexpr static uint32_t IDLE_SLEEP_THRESHOLD = 10;
-  constexpr static uint32_t DEBOUNCE_TIME_MS = 20;
+  constexpr static uint8_t DEBOUNCE_THRESHOLD =
+      2; // Need 2 consecutive readings for stability
 
   enum class InternalState : uint8_t {
     IDLE = 0,
@@ -187,6 +189,12 @@ private:
 
     uint32_t state_entry_tick; ///< Global tick value entering current state
     uint16_t long_press_cnt;   ///< Long press event triggered count
+
+    // Independent debouncing state
+    uint8_t
+        debounce_counter; ///< Counter for stable readings (integration method)
+    bool last_raw_state;  ///< Last raw GPIO reading
+    bool debounced_state; ///< Current debounced stable state
   };
 
   struct CombinedButton {
@@ -204,9 +212,11 @@ private:
   LibXR::Timer::TimerHandle
       state_timer_; ///< Global timer handle for state timing management
 
-  volatile bool is_polling_active_ = false; ///< Flag for active polling mode
+  std::atomic<bool> is_polling_active_ =
+      false; ///< Flag for active polling mode
 
-  uint32_t mask_update_tick_ = 0; ///< Timestamp when button mask last changed
+  std::atomic<bool> interrupts_need_disable_ =
+      false; ///< Flag to disable interrupts in first timer callback
 
   uint32_t idle_hysteresis_ =
       0; ///< Counter to delay sleep after button release
@@ -216,8 +226,6 @@ private:
 
   [[maybe_unused]] ButtonMaskType current_mask_ =
       0; ///< Current button state mask
-  [[maybe_unused]] ButtonMaskType last_mask_ =
-      0; ///< Previous button state mask
 
   [[maybe_unused]] std::array<SingleButton, BITS_BTN_MAX_SINGLES>
       single_buttons_{}; ///< Array of single button states
@@ -260,7 +268,12 @@ private:
                                .state_bits = 0,
 
                                .state_entry_tick = 0,
-                               .long_press_cnt = 0};
+                               .long_press_cnt = 0,
+
+                               // Initialize debouncing state
+                               .debounce_counter = 0,
+                               .last_raw_state = false,
+                               .debounced_state = false};
 
       valid_single_count_++;
 
@@ -411,12 +424,7 @@ private:
     LibXR::Timer::Start(state_timer_);
     is_polling_active_ = true;
     idle_hysteresis_ = 0;
-
-    for (auto &btn : single_buttons_) {
-      if (btn.gpio_handle) {
-        btn.gpio_handle->DisableInterrupt();
-      }
-    }
+    interrupts_need_disable_ = true; // Mark that interrupts need disabling
   }
 
   void EnterSleepMode() {
@@ -499,35 +507,65 @@ private:
   }
 
   /**
+   * @brief Update debounced state for a single button using integration method
+   * @param btn Reference to the button structure
+   * @param raw_state Current raw GPIO reading
+   */
+  void UpdateButtonDebounce(SingleButton &btn, bool raw_state) {
+    if (raw_state != btn.last_raw_state) {
+      // State changed, reset counter
+      btn.debounce_counter = 1;
+      btn.last_raw_state = raw_state;
+    } else if (btn.debounce_counter < DEBOUNCE_THRESHOLD) {
+      // Same state, increment counter
+      btn.debounce_counter++;
+    }
+
+    // Update debounced state only when we have enough stable readings
+    if (btn.debounce_counter >= DEBOUNCE_THRESHOLD) {
+      btn.debounced_state = btn.last_raw_state;
+    }
+  }
+
+  /**
    * @brief Timer callback function for button state management
    * @param instance Pointer to the BitsButtonXR instance
    */
   static void StateTimerOnTick(BitsButtonXR *instance) {
     uint32_t now = LibXR::Thread::GetTime();
 
-    ButtonMaskType new_mask = 0;
+    // Step 0: Disable interrupts if needed (moved from ISR for faster ISR
+    // response)
+    if (instance->interrupts_need_disable_) {
+      for (size_t i = 0; i < instance->valid_single_count_; ++i) {
+        auto &btn = instance->single_buttons_[i];
+        if (btn.gpio_handle) {
+          btn.gpio_handle->DisableInterrupt();
+        }
+      }
+      instance->interrupts_need_disable_ = false;
+    }
+
+    // Step 1: Update debounced state for each button independently
     for (size_t i = 0; i < instance->valid_single_count_; ++i) {
       auto &btn = instance->single_buttons_[i];
-      new_mask |= (btn.gpio_handle->Read() == btn.active_level)
-                      ? (1UL << btn.logic_index)
-                      : 0;
+      bool raw_state = btn.gpio_handle->Read() == btn.active_level;
+      instance->UpdateButtonDebounce(btn, raw_state);
     }
 
-    if (new_mask != instance->last_mask_) {
-      instance->last_mask_ = new_mask;
-      instance->mask_update_tick_ = now;
-      return;
+    // Step 2: Build current mask from debounced states
+    instance->current_mask_ = 0;
+    for (size_t i = 0; i < instance->valid_single_count_; ++i) {
+      auto &btn = instance->single_buttons_[i];
+      if (btn.debounced_state) {
+        instance->current_mask_ |= (1UL << btn.logic_index);
+      }
     }
-
-    if (now - instance->mask_update_tick_ < DEBOUNCE_TIME_MS) {
-      return;
-    }
-
-    instance->current_mask_ = new_mask;
 
     ButtonMaskType suppression = 0;
     uint32_t active_count = 0;
 
+    // Step 3: Process combined buttons
     for (size_t i = 0; i < instance->valid_combined_count_; ++i) {
       auto &combined = instance->combined_buttons_[i];
 
@@ -548,6 +586,7 @@ private:
       }
     }
 
+    // Step 4: Process individual buttons
     for (size_t i = 0; i < instance->valid_single_count_; ++i) {
       auto &btn = instance->single_buttons_[i];
 
@@ -569,7 +608,7 @@ private:
       }
     }
 
-    // Direct sleep check
+    // Step 5: Sleep check
     if (instance->current_mask_ == 0 && active_count == 0) {
       instance->idle_hysteresis_++;
       if (instance->idle_hysteresis_ > IDLE_SLEEP_THRESHOLD) {
