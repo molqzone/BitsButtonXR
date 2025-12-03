@@ -419,9 +419,6 @@ private:
     }
   }
 
-  // CheckAndEnterSleep removed - logic now integrated directly into
-  // StateTimerOnTick for better performance and no redundant array traversals
-
   void EnterSleepMode() {
     LibXR::Timer::Stop(state_timer_);
     is_polling_active_ = false;
@@ -553,10 +550,13 @@ private:
 
     for (size_t i = 0; i < instance->valid_single_count_; ++i) {
       auto &btn = instance->single_buttons_[i];
+
       if (suppression & (1UL << btn.logic_index)) {
-        // Count suppressed buttons if they're active
+        // Force reset suppressed buttons to IDLE
         if (btn.current_state != InternalState::IDLE) {
-          active_count++;
+          btn.current_state = InternalState::IDLE;
+          btn.state_bits = 0;
+          btn.long_press_cnt = 0;
         }
         continue;
       }
