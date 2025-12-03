@@ -260,10 +260,8 @@ private:
       0; ///< Total count of all buttons (physical + combined)
   uint8_t physical_count_ = 0; ///< Count of physical buttons (for optimization)
 
-  [[maybe_unused]] ButtonMaskType current_mask_ =
-      0; ///< Current button state mask
-
-  [[maybe_unused]] std::array<GenericButton, BITS_BTN_MAX_TOTAL>
+  ButtonMaskType current_mask_ = 0; ///< Current button state mask
+  std::array<GenericButton, BITS_BTN_MAX_TOTAL>
       all_buttons_{}; ///< Unified array of all button states
 
   void RecordHistory(GenericButton &btn, bool pressed) {
@@ -304,8 +302,9 @@ private:
 
     // Hardware Lookup
     LibXR::GPIO *gpio_handle = hw.template Find<LibXR::GPIO>(cfg.key_alias);
-    if (!gpio_handle)
+    if (!gpio_handle) {
       return LibXR::ErrorCode::NOT_FOUND;
+    }
 
     // Union setup
     btn.cfg.phys.gpio = gpio_handle;
@@ -316,7 +315,7 @@ private:
     // Hardware Config
     auto dir = LibXR::GPIO::Direction::FALL_RISING_INTERRUPT;
     auto pull =
-        cfg.active_level ? LibXR::GPIO::Pull::UP : LibXR::GPIO::Pull::DOWN;
+        cfg.active_level ? LibXR::GPIO::Pull::DOWN : LibXR::GPIO::Pull::UP;
     gpio_handle->SetConfig({dir, pull});
 
     // Callback Registration
@@ -337,8 +336,9 @@ private:
   void InitCombinedButton(const CombinedButtonConfig &cfg) {
     // Validate indices first
     for (uint8_t j = 0; j < cfg.key_count; ++j) {
-      if (cfg.button_indices[j] >= physical_count_)
-        return; // Invalid index
+      if (cfg.button_indices[j] >= physical_count_) {
+        return;
+      }
     }
 
     auto &btn = all_buttons_[total_count_];
@@ -367,8 +367,9 @@ private:
    * @brief Sort combined buttons by key_count descending (Insertion Sort)
    */
   void SortCombinedButtons() {
-    if (total_count_ <= physical_count_ + 1)
+    if (total_count_ <= physical_count_ + 1) {
       return;
+    }
 
     // Insertion Sort: Range [physical_count_ + 1, total_count_)
     for (size_t i = physical_count_ + 1; i < total_count_; ++i) {
