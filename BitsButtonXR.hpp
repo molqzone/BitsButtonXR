@@ -104,6 +104,7 @@ public:
         state_timer_(LibXR::Timer::CreateTask(StateTimerOnTick, this,
                                               TIMER_INTERVAL_MS)) {
     UNUSED(app);
+    LibXR::Timer::Add(state_timer_);
     LibXR::Timer::Stop(state_timer_);
 
     // 1. Capacity Check
