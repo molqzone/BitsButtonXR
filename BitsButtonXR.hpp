@@ -32,6 +32,7 @@ depends: []
 #include "timer.hpp"
 #include <atomic>
 #include <cstdint>
+#include <cstring>
 
 #define BITS_BTN_MAX_SINGLES 32
 #define BITS_BTN_MAX_COMBINED 16
@@ -70,8 +71,7 @@ public:
   struct CombinedButtonConfig {
     const char *combined_alias; ///< Name identifier for the combination
     bool suppress_single_keys; ///< Whether to suppress individual button events
-    uint8_t key_count;         ///< Number of buttons in this combination
-    const uint8_t *button_indices; ///< Array of button indices
+    std::initializer_list<const char *> constituent_aliases;
     ButtonConstraints constraints; ///< Timing constraints for this combination
   };
 
@@ -125,11 +125,29 @@ public:
 
     // 3. Initialize Combined Buttons
     for (const auto &cfg : combined_configs) {
-      InitCombinedButton(cfg);
+      if (InitCombinedButton(cfg) != LibXR::ErrorCode::OK) {
+        // Handle error: configuration refers to non-existent button
+        // assert(false);
+        return;
+      }
     }
 
     // 4. Sort Priorities
     SortCombinedButtons();
+
+    // 5. Mark suppressible physical buttons
+    for (size_t i = physical_count_; i < total_count_; ++i) {
+      auto &comb = all_buttons_[i];
+      if (comb.cfg.comb.suppress_single) {
+        // Mark all constituent buttons as suppressible
+        for (size_t p = 0; p < physical_count_; ++p) {
+          auto &phys_btn = all_buttons_[p];
+          if (comb.cfg.comb.mask & (1UL << phys_btn.logic_index)) {
+            phys_btn.cfg.phys.is_suppressible = true;
+          }
+        }
+      }
+    }
   }
 
   /**
@@ -137,6 +155,27 @@ public:
    * @return Event handle for button notifications
    */
   LibXR::Event GetEventHandle() { return button_events_; }
+
+  /**
+   * @brief Debug function to print button configuration
+   */
+  void DebugPrintButtonConfig() {
+    LibXR::STDIO::Printf("=== Button Debug Info ===\r\n");
+    LibXR::STDIO::Printf("Physical count: %d, Total count: %d\r\n", physical_count_, total_count_);
+
+    for (uint8_t i = 0; i < physical_count_; ++i) {
+      auto &btn = all_buttons_[i];
+      LibXR::STDIO::Printf("Physical[%d]: alias='%s', logic_index=%d\r\n",
+                          i, btn.key_alias, btn.logic_index);
+    }
+
+    for (uint8_t i = physical_count_; i < total_count_; ++i) {
+      auto &btn = all_buttons_[i];
+      LibXR::STDIO::Printf("Combined[%d]: alias='%s', logic_index=%d, mask=0x%02X, suppress=%d\r\n",
+                          i, btn.key_alias, btn.logic_index, btn.cfg.comb.mask, btn.cfg.comb.suppress_single);
+    }
+    LibXR::STDIO::Printf("========================\r\n");
+  }
 
   /**
    * @brief Generate event ID for Event::Register
@@ -227,6 +266,8 @@ private:
         bool active_level;    ///< Active level for button press
         bool last_raw_state;  ///< Last raw GPIO reading
         bool debounced_state; ///< Current debounced stable state
+        bool is_suppressible; ///< Whether this button participates in a suppressible combo
+        uint32_t pending_press_tick; ///< Timestamp when button started waiting for combo
       } phys;
 
       // Combined button specific configuration
@@ -279,6 +320,10 @@ private:
     btn.state_entry_tick = 0;
     btn.long_press_cnt = 0;
     btn.debounce_counter = 0;
+    if (btn.type == GenericButton::PHYSICAL) {
+      btn.cfg.phys.is_suppressible = false;
+      btn.cfg.phys.pending_press_tick = 0;
+    }
   }
 
   // === Private Helper Functions ===
@@ -331,37 +376,65 @@ private:
   }
 
   /**
-   * @brief Initialize a combined button
-   * @param cfg Combined button configuration
+   * @brief Helper: Resolve a string alias to a logical index
+   * Only searches currently initialized PHYSICAL buttons.
    */
-  void InitCombinedButton(const CombinedButtonConfig &cfg) {
-    // Validate indices first
-    for (uint8_t j = 0; j < cfg.key_count; ++j) {
-      if (cfg.button_indices[j] >= physical_count_) {
-        return;
+  uint8_t ResolveAliasToIndex(const char *alias) {
+    if (!alias)
+      return BITS_BTN_INVALID_INDEX;
+
+    for (uint8_t i = 0; i < physical_count_; ++i) {
+      // 比较物理按键的 alias
+      if (all_buttons_[i].type == GenericButton::PHYSICAL &&
+          all_buttons_[i].key_alias &&
+          strcmp(all_buttons_[i].key_alias, alias) == 0) {
+        return all_buttons_[i].logic_index;
       }
     }
+    return BITS_BTN_INVALID_INDEX;
+  }
 
+  
+  /**
+   * @brief Initialize a combined button using aliases
+   * @param cfg Combined button configuration
+   * @return ErrorCode indicating success or failure
+   */
+  LibXR::ErrorCode InitCombinedButton(const CombinedButtonConfig &cfg) {
+    // 1. Calculate Mask by resolving aliases
+    ButtonMaskType mask = 0;
+    uint8_t valid_key_count = 0;
+
+    for (const char *alias : cfg.constituent_aliases) {
+      uint8_t idx = ResolveAliasToIndex(alias);
+
+      if (idx == BITS_BTN_INVALID_INDEX) {
+        return LibXR::ErrorCode::NOT_FOUND;
+      }
+
+      mask |= static_cast<ButtonMaskType>(1UL) << idx;
+      valid_key_count++;
+    }
+
+    if (valid_key_count == 0) {
+      return LibXR::ErrorCode::ARG_ERR;
+    }
+
+    // 2. Setup the object
     auto &btn = all_buttons_[total_count_];
 
-    // Common Init
     btn.type = GenericButton::COMBINED;
     btn.key_alias = cfg.combined_alias;
     btn.logic_index = total_count_;
     btn.constraints = cfg.constraints;
     ResetState(btn);
 
-    // Union setup - inline mask calculation for simplicity
-    ButtonMaskType mask = 0;
-    for (uint8_t j = 0; j < cfg.key_count; ++j) {
-      mask |= static_cast<ButtonMaskType>(1UL) << cfg.button_indices[j];
-    }
-
     btn.cfg.comb.mask = mask;
     btn.cfg.comb.suppress_single = cfg.suppress_single_keys;
-    btn.cfg.comb.key_count = cfg.key_count;
+    btn.cfg.comb.key_count = valid_key_count;
 
     total_count_++;
+    return LibXR::ErrorCode::OK;
   }
 
   /**
@@ -546,7 +619,8 @@ private:
     instance->current_mask_ = 0;
     for (size_t i = 0; i < instance->physical_count_; ++i) {
       auto &btn = instance->all_buttons_[i];
-      bool raw_state = btn.cfg.phys.gpio->Read() == btn.cfg.phys.active_level;
+      bool gpio_read = btn.cfg.phys.gpio->Read();
+      bool raw_state = gpio_read == btn.cfg.phys.active_level;
       instance->UpdateButtonDebounce(btn, raw_state);
 
       if (btn.cfg.phys.debounced_state) {
@@ -601,18 +675,41 @@ private:
     for (size_t i = 0; i < instance->physical_count_; ++i) {
       auto &btn = instance->all_buttons_[i];
 
-      // Physical button specific suppression logic
-      if (suppression_mask & (1UL << btn.logic_index)) {
-        // Force reset suppressed buttons to IDLE
+      bool pressed = btn.cfg.phys.debounced_state;
+      uint8_t btn_bit = (1UL << btn.logic_index);
+      bool suppressed = (suppression_mask & btn_bit) != 0;
+
+      // Physical button specific suppression logic - check BEFORE processing
+      if (suppressed) {
+        // Force reset suppressed buttons to IDLE and clear pending state
         if (btn.current_state != InternalState::IDLE) {
           btn.current_state = InternalState::IDLE;
           btn.state_bits = 0;
           btn.long_press_cnt = 0;
         }
+        btn.cfg.phys.pending_press_tick = 0; // Clear pending state when suppressed
         continue;
       }
 
-      bool pressed = btn.cfg.phys.debounced_state;
+      // [Linus Fix] Commit Delay Logic - Handle the synchronization crisis
+      if (pressed && btn.current_state == InternalState::IDLE) {
+        if (btn.cfg.phys.is_suppressible) {
+          if (btn.cfg.phys.pending_press_tick == 0) {
+            // Just pressed, start holding breath
+            btn.cfg.phys.pending_press_tick = now;
+            pressed = false; // Lie to the world: I'm not pressed (yet)
+          } else if (now - btn.cfg.phys.pending_press_tick < 50) { // 50ms window
+            // Still holding breath, waiting for combo partners
+            pressed = false;
+          } else {
+            // Breathing finished, combo didn't happen, finally trigger
+            // pressed = true; // Already true, let it proceed
+          }
+        }
+      } else {
+        // Not pressed or already in other states, clear pending
+        btn.cfg.phys.pending_press_tick = 0;
+      }
 
       // Use common logic for state update and counting
       process_button(btn, pressed);
@@ -628,4 +725,5 @@ private:
       instance->idle_hysteresis_ = 0;
     }
   }
-};
+
+  };
