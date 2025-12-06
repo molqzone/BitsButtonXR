@@ -2,7 +2,7 @@
 
 // clang-format off
 /* === MODULE MANIFEST V2 ===
-module_description: BitsButtonXR module for button management
+module_description: Module for button management
 constructor_args:
   single_buttons:
     - key_alias: "btn1"
@@ -19,7 +19,22 @@ constructor_args:
         long_press_start_time_ms: 1000
         long_press_period_triger_ms: 500
         time_window_time_ms: 300
-  combined_buttons: []
+    - key_alias: "btn3"
+      active_level: false
+      constraints:
+        short_press_time_ms: 50
+        long_press_start_time_ms: 1000
+        long_press_period_triger_ms: 500
+        time_window_time_ms: 300
+  combined_buttons:
+    - key_alias: "btn1_btn2"
+      suppress_single_keys: true
+      constituent_aliases: ["btn1", "btn2"]
+      constraints:
+        short_press_time_ms: 50
+        long_press_start_time_ms: 1000
+        long_press_period_triger_ms: 500
+        time_window_time_ms: 300
 template_args: []
 required_hardware: []
 depends: []
@@ -90,8 +105,7 @@ public:
   };
 
   /**
-   * @brief Construct a new BitsButtonXR object with unified data-oriented
-   * design
+   * @brief Construct a new BitsButtonXR object
    * @param hw Hardware container for GPIO access
    * @param app Application manager reference
    * @param single_configs List of individual button configurations
@@ -166,7 +180,7 @@ public:
   }
 
   /**
-   * @brief Get event result and remove from queue (consume)
+   * @brief Get event result and remove from queue
    * @param out_result Reference to store the event result
    * @return True if event was successfully retrieved and removed, false
    * otherwise
@@ -217,9 +231,6 @@ private:
     FINISH = 5
   };
 
-  /**
-   * @brief Unified button structure using tagged union for data-oriented design
-   */
   struct GenericButton {
     const char *key_alias;       ///< Button name identifier
     InternalState current_state; ///< Current state machine state
@@ -294,8 +305,6 @@ private:
       btn.cfg.phys.pending_press_tick = 0;
     }
   }
-
-  /* Private Helper Functions */
 
   /**
    * @brief Initialize a single physical button
@@ -465,7 +474,7 @@ private:
   }
 
   /**
-   * @brief Update the state machine for a generic button
+   * @brief Update the state machine
    * @param btn Reference to the button state structure
    * @param is_active Current button state (true if active/pressed)
    * @param current_tick Current system tick time
