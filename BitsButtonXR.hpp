@@ -142,7 +142,8 @@ public:
         // Mark all constituent buttons as suppressible
         for (size_t p = 0; p < physical_count_; ++p) {
           auto &phys_btn = all_buttons_[p];
-          if (comb.cfg.comb.mask & (1UL << phys_btn.logic_index)) {
+          if (comb.cfg.comb.mask &
+              (static_cast<ButtonMaskType>(1UL) << phys_btn.logic_index)) {
             phys_btn.cfg.phys.is_suppressible = true;
           }
         }
@@ -161,18 +162,21 @@ public:
    */
   void DebugPrintButtonConfig() {
     LibXR::STDIO::Printf("=== Button Debug Info ===\r\n");
-    LibXR::STDIO::Printf("Physical count: %d, Total count: %d\r\n", physical_count_, total_count_);
+    LibXR::STDIO::Printf("Physical count: %d, Total count: %d\r\n",
+                         physical_count_, total_count_);
 
     for (uint8_t i = 0; i < physical_count_; ++i) {
       auto &btn = all_buttons_[i];
-      LibXR::STDIO::Printf("Physical[%d]: alias='%s', logic_index=%d\r\n",
-                          i, btn.key_alias, btn.logic_index);
+      LibXR::STDIO::Printf("Physical[%d]: alias='%s', logic_index=%d\r\n", i,
+                           btn.key_alias, btn.logic_index);
     }
 
     for (uint8_t i = physical_count_; i < total_count_; ++i) {
       auto &btn = all_buttons_[i];
-      LibXR::STDIO::Printf("Combined[%d]: alias='%s', logic_index=%d, mask=0x%02X, suppress=%d\r\n",
-                          i, btn.key_alias, btn.logic_index, btn.cfg.comb.mask, btn.cfg.comb.suppress_single);
+      LibXR::STDIO::Printf("Combined[%d]: alias='%s', logic_index=%d, "
+                           "mask=0x%02X, suppress=%d\r\n",
+                           i, btn.key_alias, btn.logic_index, btn.cfg.comb.mask,
+                           btn.cfg.comb.suppress_single);
     }
     LibXR::STDIO::Printf("========================\r\n");
   }
@@ -262,12 +266,14 @@ private:
     union Config {
       // Physical button specific configuration
       struct {
-        LibXR::GPIO *gpio;    ///< Hardware handle
-        bool active_level;    ///< Active level for button press
-        bool last_raw_state;  ///< Last raw GPIO reading
-        bool debounced_state; ///< Current debounced stable state
-        bool is_suppressible; ///< Whether this button participates in a suppressible combo
-        uint32_t pending_press_tick; ///< Timestamp when button started waiting for combo
+        LibXR::GPIO *gpio;           ///< Hardware handle
+        bool active_level;           ///< Active level for button press
+        bool last_raw_state;         ///< Last raw GPIO reading
+        bool debounced_state;        ///< Current debounced stable state
+        bool is_suppressible;        ///< Whether this button participates in a
+                                     ///< suppressible combo
+        uint32_t pending_press_tick; ///< Timestamp when button started waiting
+                                     ///< for combo
       } phys;
 
       // Combined button specific configuration
@@ -394,7 +400,6 @@ private:
     return BITS_BTN_INVALID_INDEX;
   }
 
-  
   /**
    * @brief Initialize a combined button using aliases
    * @param cfg Combined button configuration
@@ -624,7 +629,8 @@ private:
       instance->UpdateButtonDebounce(btn, raw_state);
 
       if (btn.cfg.phys.debounced_state) {
-        instance->current_mask_ |= (1UL << btn.logic_index);
+        instance->current_mask_ |=
+            (static_cast<ButtonMaskType>(1UL) << btn.logic_index);
       }
     }
 
@@ -676,7 +682,8 @@ private:
       auto &btn = instance->all_buttons_[i];
 
       bool pressed = btn.cfg.phys.debounced_state;
-      uint8_t btn_bit = (1UL << btn.logic_index);
+      ButtonMaskType btn_bit =
+          (static_cast<ButtonMaskType>(1UL) << btn.logic_index);
       bool suppressed = (suppression_mask & btn_bit) != 0;
 
       // Physical button specific suppression logic - check BEFORE processing
@@ -687,7 +694,8 @@ private:
           btn.state_bits = 0;
           btn.long_press_cnt = 0;
         }
-        btn.cfg.phys.pending_press_tick = 0; // Clear pending state when suppressed
+        btn.cfg.phys.pending_press_tick =
+            0; // Clear pending state when suppressed
         continue;
       }
 
@@ -698,7 +706,8 @@ private:
             // Just pressed, start holding breath
             btn.cfg.phys.pending_press_tick = now;
             pressed = false; // Lie to the world: I'm not pressed (yet)
-          } else if (now - btn.cfg.phys.pending_press_tick < 50) { // 50ms window
+          } else if (now - btn.cfg.phys.pending_press_tick <
+                     50) { // 50ms window
             // Still holding breath, waiting for combo partners
             pressed = false;
           } else {
@@ -725,5 +734,4 @@ private:
       instance->idle_hysteresis_ = 0;
     }
   }
-
-  };
+};
