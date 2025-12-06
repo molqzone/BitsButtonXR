@@ -7,63 +7,65 @@
 [![GitHub forks](https://img.shields.io/github/forks/molqzone/BitsButtonXR?style=social)](https://github.com/molqzone/BitsButtonXR/network/members)
 [![GitHub issues](https://img.shields.io/github/issues/molqzone/BitsButtonXR)](https://github.com/molqzone/BitsButtonXR/issues)
 
-**BitsButtonXR** 是一个专为嵌入式系统设计的高性能按键检测模块。
+**[English](README.md)** | [中文](README_CN.md)
 
-## 模块简介
+**BitsButtonXR** is a high-performance button detection module designed specifically for embedded systems.
 
-它继承了 [BitsButton](https://github.com/530china/BitsButton) 框架经典的**二进制序列状态机技术**，并基于 [XRobot](https://xrobot-org.github.io/docs/concept) 的设计规范进行了适配。通过集成 [LibXR](https://github.com/Jiu-xiao/libxr) 中间件，BitsButtonXR 实现了**自动化的运行管理**与**标准化的事件分发**，无需用户手动维护轮询时序，极大地简化了系统集成逻辑。
+## Module Introduction
 
-详细的使用教程和 API 文档请查阅 [项目 Wiki](https://github.com/YourUsername/BitsButtonXR/wiki)。
+It inherits the classic **binary sequence state machine technology** from [BitsButton](https://github.com/530china/BitsButton) framework and has been adapted according to the design concept of [XRobot](https://xrobot-org.github.io/docs/concept). Through integration with [LibXR](https://github.com/Jiu-xiao/libxr) middleware, BitsButtonXR achieves **automated runtime management** and **standardized event distribution**, eliminating the need for manual polling sequence maintenance and greatly simplifying system integration logic.
 
-## 特性总结
+For detailed usage tutorials and API documentation, please refer to the [Project Wiki](https://github.com/YourUsername/BitsButtonXR/wiki).
 
-- 基于 `LibXR::GPIO` 与 `LibXR::Timer` 接口实现硬件抽象，解耦底层平台差异并统一时序调度。
+## Features
 
-- 遵循 `Application` 框架规范，支持通过 MANIFEST 实现依赖注入与生命周期的自动化管理。
+- Based on `LibXR::GPIO` and `LibXR::Timer` interfaces for hardware abstraction, decoupling underlying platform differences and unifying timing scheduling.
 
-- 采用 `LibXR::Event` 信号与 `LibXR::LockFreeQueue` 数据分离架构，构建线程安全的单生产者多消费者模型。
+- Follows `Application` framework specifications, supporting dependency injection and automated lifecycle management through MANIFEST.
 
-- 应用**中断唤醒与定时器轮询相结合**的混合调度机制，实现低功耗响应与机械抖动的物理隔离。
+- Uses `LibXR::Event` signals and `LibXR::LockFreeQueue` data separation architecture to build a thread-safe single-producer multi-consumer model.
 
-## 硬件需求
+- Applies a hybrid scheduling mechanism **combining interrupt wake-up and timer polling** to achieve low-power response and physical isolation from mechanical bounce.
 
-- 需提供与 `single_buttons` 配置中 `key_alias` 相匹配的 GPIO 设备节点
+## Hardware Requirements
 
-## 构造参数
+- GPIO device nodes matching the `key_alias` in the `single_buttons` configuration must be provided.
+
+## Constructor Parameters
 
 - `single_buttons`
-  - 单按键配置列表 (`SingleButtonConfig`)。包含 GPIO 别名、有效电平（高/低）及时间约束参数（短按/长按阈值等）。
+  - Single button configuration list (`SingleButtonConfig`). Contains GPIO alias, active level (high/low), and timing constraint parameters (short press/long press thresholds, etc.).
 
 - `combined_buttons`
-  - 组合按键配置列表 (`CombinedButtonConfig`)。包含组合键别名、是否抑制单键事件及构成该组合键的按键索引数组。
+  - Combined button configuration list (`CombinedButtonConfig`). Contains combination alias, whether to suppress single button events, and array of button indices that form the combination.
 
-### API 说明
+### API Reference
 
 ```cpp
-/** 时间参数约束 */
+/** Timing parameter constraints */
 struct ButtonConstraints {
-    uint16_t short_press_time_ms;          // 短按阈值 (ms)
-    uint16_t long_press_start_time_ms;     // 长按触发时间 (ms)
-    uint16_t long_press_period_triger_ms;  // 长按保持事件触发周期 (ms)
-    uint16_t time_window_time_ms;          // 双击/连击判定窗口时间 (ms)
+    uint16_t short_press_time_ms;         ///< Time threshold for short press
+    uint16_t long_press_start_time_ms;    ///< Time when long press starts
+    uint16_t long_press_period_triger_ms; ///< Period for long press hold events
+    uint16_t time_window_time_ms;         ///< Window for double click detection
 };
 
-/** 单按键配置 */
-struct SingleButtonConfig {
-    const char *key_alias;          // 硬件容器中的 GPIO 别名
-    bool active_level;              // 有效电平 (true=高电平, false=低电平)
-    ButtonConstraints constraints;  // 时间参数
-};
-
-/** 组合按键配置 */
+/** Combined button configuration */
 struct CombinedButtonConfig {
-    const char *combined_alias;     // 组合键的虚拟别名
-    bool suppress_single_keys;      // 是否抑制构成该组合键的单键事件
-    uint8_t key_count;              // 组合键包含的按键数量
-    const uint8_t *button_indices;  // 按键索引数组 (指向 single_buttons 列表中的索引)
+    const char *combined_alias; ///< Name identifier for the combination
+    bool suppress_single_keys; ///< Whether to suppress individual button events
+    std::initializer_list<const char *> constituent_aliases; ///< List of button aliases in combination
+    ButtonConstraints constraints; ///< Timing constraints for this combination
+};
+
+/** Single button configuration */
+struct SingleButtonConfig {
+    const char *key_alias;         ///< GPIO name identifier for the button
+    bool active_level;             ///< GPIO level that indicates button press
+    ButtonConstraints constraints; ///< Timing constraints for this button
 };
 ```
 
-## 依赖
+## Dependencies
 
-- 无依赖（除 LibXR 基础框架外）。
+- No dependencies (except for the LibXR basic framework).
