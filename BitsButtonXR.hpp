@@ -157,30 +157,7 @@ public:
    */
   LibXR::Event GetEventHandle() { return button_events_; }
 
-  /**
-   * @brief Debug function to print button configuration
-   */
-  void DebugPrintButtonConfig() {
-    LibXR::STDIO::Printf("=== Button Debug Info ===\r\n");
-    LibXR::STDIO::Printf("Physical count: %d, Total count: %d\r\n",
-                         physical_count_, total_count_);
-
-    for (uint8_t i = 0; i < physical_count_; ++i) {
-      auto &btn = all_buttons_[i];
-      LibXR::STDIO::Printf("Physical[%d]: alias='%s', logic_index=%d\r\n", i,
-                           btn.key_alias, btn.logic_index);
-    }
-
-    for (uint8_t i = physical_count_; i < total_count_; ++i) {
-      auto &btn = all_buttons_[i];
-      LibXR::STDIO::Printf("Combined[%d]: alias='%s', logic_index=%d, "
-                           "mask=0x%02X, suppress=%d\r\n",
-                           i, btn.key_alias, btn.logic_index, btn.cfg.comb.mask,
-                           btn.cfg.comb.suppress_single);
-    }
-    LibXR::STDIO::Printf("========================\r\n");
-  }
-
+  
   /**
    * @brief Generate event ID for Event::Register
    * Format: [Reserved 16bit] [Index 8bit] [Type 8bit]
